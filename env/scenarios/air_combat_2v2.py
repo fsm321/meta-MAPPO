@@ -93,11 +93,11 @@ class Scenario(BaseScenario):
                 agent.state.p_pos[1]) > 8.0 or agent.state.z_pos < 1.0 or agent.state.z_pos > 9.0:
             rew -= 1.0
 
-        rew -= 0.05  # 时间惩罚
+        rew -= 0.01  # 时间惩罚
 
         # 2. 动作平滑
         if hasattr(agent.action, 'u'):
-            rew -= 0.1 * np.sum(np.square(agent.action.u - agent.last_action))
+            rew -= 0.02 * np.sum(np.square(agent.action.u - agent.last_action))
             agent.last_action = np.copy(agent.action.u)
 
         ens = [e for e in world.agents if e.team == 1 and not e.is_dead]
@@ -115,16 +115,16 @@ class Scenario(BaseScenario):
 
         # 3. 基础生存与高度保持
         if 4.0 < agent.state.z_pos < 6.0 and is_engaging:
-            rew += 0.1
+            rew += 0.2
 
         # 4. 势能与攻击奖励
-        if d_min < 8.0:
-            rew += (math.pi - ata) / math.pi * 2.0
-            if ata < math.pi / 6 and d_min < 3.5:
-                rew += 5.0
+        if d_min < 12.0:
+            rew += (math.pi - ata) / math.pi * 3.0
+            if ata < math.pi / 4 and d_min < 4.5:
+                rew += 8.0
                 am_i_attacking = True
                 t_en.hp -= 20.0
-                if t_en.hp <= 0: t_en.is_dead, t_en.done, rew = True, True, rew + 80.0
+                if t_en.hp <= 0: t_en.is_dead, t_en.done, rew = True, True, rew + 120.0
 
         # 5. 多机协同机制 (防撞与集火)
         teammates = [a for a in world.agents if a.team == agent.team and a != agent and not a.is_dead]

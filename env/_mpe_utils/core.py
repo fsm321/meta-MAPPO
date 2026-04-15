@@ -125,10 +125,19 @@ class World(object):
         a = action[0] * 2.0
         w_yaw = action[1] * np.pi/4
         w_pitch = action[2] * np.pi/6
+        # ==========================================
+        # 限制蓝方（team == 1）的机动性能
+        # 让红方的最高速度可达 3.5，蓝方最高被锁死在 2.5
+        # ==========================================
+        if agent.team == 1:
+            agent.state.p_vel = np.clip(agent.state.p_vel + a * self.dt, 0.5, 2.5)
+            # 顺便削弱蓝方的转向灵敏度
+            agent.state.yaw += w_yaw * self.dt * 0.8
+        else:
+            agent.state.p_vel = np.clip(agent.state.p_vel + a * self.dt, 0.5, 3.5)
+            agent.state.yaw += w_yaw * self.dt
 
-        agent.state.p_vel = np.clip(agent.state.p_vel + a * self.dt, 0.5, 3.0)
-        agent.state.yaw += w_yaw * self.dt
-        agent.state.pitch = np.clip(agent.state.pitch + w_pitch * self.dt, -np.pi/3, np.pi/3)
+        agent.state.pitch = np.clip(agent.state.pitch + w_pitch * self.dt, -np.pi / 3, np.pi / 3)
 
         vx = agent.state.p_vel * np.cos(agent.state.yaw) * np.cos(agent.state.pitch)
         vy = agent.state.p_vel * np.sin(agent.state.yaw) * np.cos(agent.state.pitch)

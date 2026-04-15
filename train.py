@@ -55,7 +55,9 @@ def main(args, seed):
             s_next, r, done, _ = env.step(actions)
             for j, rid in enumerate(red_ids):
                 dw = True if done[rid] and episode_steps != args.max_episode_steps else False
-                shared_buffer.store(s[rid], actions[rid], actions_logp[rid], r[rid], s_next[rid], dw, done[rid])
+                # 【新增】：手动对奖励进行缩放 (除以 10.0)，从根本上压低 Critic 的预测方差
+                scaled_r = r[rid] * 0.1
+                shared_buffer.store(s[rid], actions[rid], actions_logp[rid],scaled_r, s_next[rid], dw, done[rid])
                 episode_rewards[rid] += r[rid]
             s, total_steps = s_next, total_steps + 1
 
@@ -126,7 +128,7 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lamda", type=float, default=0.95)
     parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--entropy_coef", type=float, default=0.001)
+    parser.add_argument("--entropy_coef", type=float, default=0.02)
 
     # Trick 开关
     parser.add_argument("--use_adv_norm", type=bool, default=True)

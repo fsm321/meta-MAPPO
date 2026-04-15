@@ -1,11 +1,21 @@
-
-
+## 更新
+代码文件夹右击打开git bash
+```bash
+git add .
+git commit -m "更新了代码什么功能"
+git push
+```
+```bash
+git add .
+git commit -m "改进目标：奖励转正、胜率破50%、Loss降至0附近"
+git push
+```
 ## 训练
 
 Anaconda终端
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.1
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python run_experiments.py
 ```
 ## 训练结果
@@ -14,13 +24,13 @@ python run_experiments.py
 ### 1.奖励曲线，损失曲线，学习率
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.1
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 tensorboard --logdir=./data/train
 ```
 plot_TensorBoard文件中改数据地址
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.1\result
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2\result
 python plot_TensorBoard.py
 ```
 1_Reward_Curve.png（得分曲线，展示 Meta-MAPPO 更聪明）
@@ -31,12 +41,12 @@ python plot_TensorBoard.py
 ### 2.抗噪图、动态恢复图、百局胜率
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.1
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python evaluate.py --algo_name MAPPO --model_dir .\data\MAPPO_seed10_0328_015339\model\326100
 ```
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.1
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python evaluate.py --algo_name Meta-MAPPO --model_dir .\data\Meta-MAPPO_seed10_0328_015339\model\327900
 ```
 做完这两步后，目录下就会多出 4 个 .npy 文件：
@@ -45,13 +55,13 @@ python evaluate.py --algo_name Meta-MAPPO --model_dir .\data\Meta-MAPPO_seed10_0
 更改胜率后运行
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.1\result
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2\result
 python plot_combined.py
 ```
 ### 3.3D图
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python plot_3D.py --algo_name Meta-MAPPO --model_dir .\data\Meta-MAPPO_seed10_0320_135440\model\407700
 ```
 

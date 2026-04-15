@@ -126,7 +126,8 @@ class MAPPO_Continuous:
                 self.optimizer_actor.step()
 
                 v_s = self.critic(s[index])
-                c_loss = F.mse_loss(v_target[index], v_s)
+                #c_loss = F.mse_loss(v_target[index], v_s)
+                c_loss = F.smooth_l1_loss(v_target[index], v_s)
                 self.optimizer_critic.zero_grad()
                 c_loss.backward()
                 if self.use_grad_clip: nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
