@@ -10,6 +10,11 @@ git add .
 git commit -m "改进目标：奖励转正、胜率破50%、Loss降至0附近"
 git push
 ```
+```bash
+git add .
+git commit -m "改进目标：改善MAPPO算法崩溃、胜率破80%、Loss降至0附近"
+git push
+```
 ## 训练
 
 Anaconda终端

@@ -91,7 +91,7 @@ class Scenario(BaseScenario):
         # 1. 软边界惩罚
         if abs(agent.state.p_pos[0]) > 8.0 or abs(
                 agent.state.p_pos[1]) > 8.0 or agent.state.z_pos < 1.0 or agent.state.z_pos > 9.0:
-            rew -= 1.0
+            rew -= 0.1
 
         rew -= 0.01  # 时间惩罚
 

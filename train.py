@@ -14,7 +14,7 @@ from algorithms.meta_mappo import Meta_MAPPO_Continuous
 from env.MPE_env import MPEEnv
 from datetime import datetime
 from evaluate import evaluate_policy
-
+from utils.normalization import Normalization, RewardScaling
 
 def main(args, seed):
     np.random.seed(seed);
@@ -34,11 +34,17 @@ def main(args, seed):
 
     total_steps, win_history = 0, deque(maxlen=100)
     current_meta_task = np.random.randint(0, 3)
-
+    # 在 while total_steps < args.max_train_steps 之前实例化归一化器
+    # 注意：这里的 state_dim 必须与 actor 接收的观测维度一致
+    state_norm = Normalization(shape=args.state_dim)
+    # 为红方两个智能体统一做一个长度为 2 的 Reward Scaling，避免串味
+    reward_scaling = RewardScaling(shape=2, gamma=args.gamma)
     while total_steps < args.max_train_steps:
         s = env.reset(task_id=current_meta_task)
         episode_steps, dones, episode_rewards = 0, np.zeros(env.n), np.zeros(env.n)
-
+        # 3. 每回合重置 RewardScaling
+        if args.use_reward_scaling:
+            reward_scaling.reset()
         while (not np.all(dones)) and (episode_steps < args.max_episode_steps):
             episode_steps += 1
             # 只取红方 (0, 1) 的观测做 Batch 推理
@@ -48,16 +54,33 @@ def main(args, seed):
 
             actions = [np.zeros(args.action_dim) for _ in range(env.n)]
             actions_logp = [np.zeros(1) for _ in range(env.n)]
+
             for j, rid in enumerate(red_ids):
                 actions[rid] = 2 * (a_batch[j] - 0.5) * args.max_action if args.policy_dist == "Beta" else a_batch[j]
                 actions_logp[rid] = a_logp_batch[j]
-
+            # 4. 对当前 step 的观测进行归一化（默认 update=True）
+            if args.use_state_norm:
+                s_batch = np.array([state_norm(s[i]) for i in red_ids])
+            else:
+                s_batch = np.array([s[i] for i in red_ids])
+            a_batch, a_logp_batch = shared_agent.choose_action(s_batch)
             s_next, r, done, _ = env.step(actions)
+            # 5. 一次性处理红方两机的奖励，确保统计量正确更新
+            if args.use_reward_scaling:
+                red_rewards = np.array([r[0], r[1]])
+                scaled_red_rewards = reward_scaling(red_rewards)
+            else:
+                scaled_red_rewards = [r[0] * 0.1, r[1] * 0.1]
+
             for j, rid in enumerate(red_ids):
                 dw = True if done[rid] and episode_steps != args.max_episode_steps else False
-                # 【新增】：手动对奖励进行缩放 (除以 10.0)，从根本上压低 Critic 的预测方差
-                scaled_r = r[rid] * 0.1
-                shared_buffer.store(s[rid], actions[rid], actions_logp[rid],scaled_r, s_next[rid], dw, done[rid])
+                # 6. 对 s_next 进行归一化，但务必设为 update=False，防止重复统计
+                if args.use_state_norm:
+                    s_next_normed = state_norm(s_next[rid], update=False)
+                else:
+                    s_next_normed = s_next[rid]
+
+                shared_buffer.store(s_batch[j], actions[rid], actions_logp[rid], scaled_red_rewards[j], s_next_normed, dw, done[rid])
                 episode_rewards[rid] += r[rid]
             s, total_steps = s_next, total_steps + 1
 
@@ -105,7 +128,7 @@ if __name__ == '__main__':
 
     # 训练步长参数
     parser.add_argument("--max_episode_steps", type=int, default=500)
-    parser.add_argument("--max_train_steps", type=int, default=int(1e8))
+    parser.add_argument("--max_train_steps", type=int, default=int(5e8))
     parser.add_argument("--evaluate_freq", type=int, default=500)
     parser.add_argument("--save_freq", type=int, default=1000)
 
@@ -128,7 +151,7 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lamda", type=float, default=0.95)
     parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--entropy_coef", type=float, default=0.02)
+    parser.add_argument("--entropy_coef", type=float, default=0.05)
 
     # Trick 开关
     parser.add_argument("--use_adv_norm", type=bool, default=True)
