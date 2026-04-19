@@ -3,6 +3,7 @@ import math
 from env._mpe_utils.core import Agent, World, fast_compute_distance_and_angle_scalar
 from env._mpe_utils.scenario import BaseScenario
 
+
 class Scenario(BaseScenario):
     def make_world(self):
         world = World()
@@ -88,7 +89,7 @@ class Scenario(BaseScenario):
             return 0.0
 
         rew = 0.0
-        # 1. 软边界惩罚
+        # 1. 软边界惩罚 (修改点：将 -1.0 大幅降低至 -0.1，防止负面奖励累计淹没正向梯度)
         if abs(agent.state.p_pos[0]) > 8.0 or abs(
                 agent.state.p_pos[1]) > 8.0 or agent.state.z_pos < 1.0 or agent.state.z_pos > 9.0:
             rew -= 0.1
@@ -126,16 +127,23 @@ class Scenario(BaseScenario):
                 t_en.hp -= 20.0
                 if t_en.hp <= 0: t_en.is_dead, t_en.done, rew = True, True, rew + 120.0
 
-        # 5. 多机协同机制 (防撞与集火)
+        # 5. 多机协同机制 (修改点：解除攻击态势下的编队距离约束)
         teammates = [a for a in world.agents if a.team == agent.team and a != agent and not a.is_dead]
         for tm in teammates:
             dist_to_tm = math.sqrt(
                 (agent.state.p_pos[0] - tm.state.p_pos[0]) ** 2 + (agent.state.p_pos[1] - tm.state.p_pos[1]) ** 2 + (
                             agent.state.z_pos - tm.state.z_pos) ** 2)
-            if dist_to_tm < 0.8:
-                rew -= 5.0
-            elif 1.5 < dist_to_tm < 4.0 and is_engaging:
-                rew += 0.5
+
+            if not am_i_attacking:
+                # 非攻击状态：要求保持编队
+                if dist_to_tm < 0.8:
+                    rew -= 5.0
+                elif 1.5 < dist_to_tm < 4.0 and is_engaging:
+                    rew += 0.5
+            else:
+                # 攻击状态：解除编队束缚，仅保留极限物理防撞惩罚
+                if dist_to_tm < 0.3:
+                    rew -= 5.0
 
             if am_i_attacking:
                 _, tm_ata = fast_compute_distance_and_angle_scalar(tm.state.p_pos[0], tm.state.p_pos[1], tm.state.z_pos,

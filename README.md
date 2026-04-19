@@ -15,6 +15,21 @@ git add .
 git commit -m "改进目标：改善MAPPO算法崩溃、胜率破80%、Loss降至0附近"
 git push
 ```
+
+```bash
+git add .
+git commit -m "
+1.Meta-MAPPO（蓝线）探索不足，收敛过慢：
+外循环更新过于保守（Actor Loss基本不降），导致无人机在前期缺乏尝试高风险、高回报战术（如主动击落敌机）的动力，陷入“消极保命”状态。
+2.MAPPO（橙线）更新激进，存在震荡风险：
+单次策略调整幅度过大（Actor Loss骤降），虽然前期冲分快，但在复杂空战态势下容易“步子迈太大”，导致后期策略不稳定或性能崩溃。
+3.双算法均遭遇“性能天花板”（局部最优）：
+胜率卡在1.8左右未能突破满分，且价值网络损失（Critic Loss）极低。这表明奖励函数的边界可能存在冲突（例如“保持编队距离”与“靠近开火”相互拉扯），导致策略无法进一步进化。
+4.训练27个小时，Meta-MAPPO可以训练25万个回合，但MAPPO只能训练18万个回合，速度慢且差异过大
+5.添加并行环境训练"
+git push
+```
+
 ## 训练
 
 Anaconda终端
@@ -23,6 +38,8 @@ D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python run_experiments.py
 ```
+python train.py --algo_name MAPPO
+python train_parallel.py --algo_name MAPPO --num_envs 8
 ## 训练结果
 
 训练过程中的日志会保存在 TensorBoard 中，可以通过以下命令查看：
