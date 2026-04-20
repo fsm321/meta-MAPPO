@@ -93,7 +93,16 @@ def main(args, seed):
         if world:
             r_a = sum([1 for a in world.agents if a.team == 0 and not a.is_dead])
             b_a = sum([1 for a in world.agents if a.team == 1 and not a.is_dead])
-            win_history.append(1 if (b_a == 0 and r_a > 0) else 0)
+
+            # win_history.append(1 if (b_a == 0 and r_a > 0) else 0)
+            # 放宽后的逻辑：全歼敌机，或者时间耗尽时我方存活数大于敌方存活数
+            if b_a == 0 and r_a > 0:
+                is_win = 1
+            elif episode_steps == args.max_episode_steps and r_a > b_a:
+                is_win = 1
+            else:
+                is_win = 0
+            win_history.append(is_win)
             if (total_steps // args.max_episode_steps) % 50 == 0:
                 writer.add_scalar("Training/Win_Rate", 100 * sum(win_history) / len(win_history),
                                   total_steps // args.max_episode_steps)

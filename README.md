@@ -29,7 +29,11 @@ git commit -m "
 5.添加并行环境训练"
 git push
 ```
-
+```bash
+git add .
+git commit -m "修改胜率判断机制"
+git push
+```
 ## 训练
 
 Anaconda终端
@@ -38,12 +42,22 @@ D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python run_experiments.py
 ```
-python train.py --algo_name MAPPO
+```bash
+D:
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python train_parallel.py --algo_name MAPPO --num_envs 8
+```
+python train.py --algo_name MAPPO
+
 ## 训练结果
 
 训练过程中的日志会保存在 TensorBoard 中，可以通过以下命令查看：
 ### 1.奖励曲线，损失曲线，学习率
+```bash
+D:
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
+tensorboard --logdir=./data/train_parallel
+```
 ```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
