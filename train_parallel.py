@@ -321,7 +321,7 @@ def main(args, seed):
     finally:
         envs.close()
         writer.close()
-        
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario_name", type=str, default="air_combat_2v2")
