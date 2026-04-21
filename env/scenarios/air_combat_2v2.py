@@ -73,6 +73,7 @@ class Scenario(BaseScenario):
                 return -20.0
             return 0.0
 
+        # 蓝方规则机：只负责攻击逻辑，不给学习奖励
         if agent.team == 1:
             reds = [r for r in world.agents if r.team == 0 and not r.is_dead]
             if reds:
@@ -89,20 +90,25 @@ class Scenario(BaseScenario):
             return 0.0
 
         rew = 0.0
-        # 1. 软边界惩罚 (修改点：将 -1.0 大幅降低至 -0.1，防止负面奖励累计淹没正向梯度)
+
+        # 1. 软边界惩罚：降低惩罚，防止负面奖励累计淹没正向梯度
         if abs(agent.state.p_pos[0]) > 8.0 or abs(
                 agent.state.p_pos[1]) > 8.0 or agent.state.z_pos < 1.0 or agent.state.z_pos > 9.0:
             rew -= 0.1
 
-        rew -= 0.01  # 时间惩罚
+        # 2.时间惩罚
+        rew -= 0.03
 
-        # 2. 动作平滑
+        # 3. 动作平滑
         if hasattr(agent.action, 'u'):
             rew -= 0.02 * np.sum(np.square(agent.action.u - agent.last_action))
             agent.last_action = np.copy(agent.action.u)
 
         ens = [e for e in world.agents if e.team == 1 and not e.is_dead]
-        if not ens: return rew + 15.0
+
+        #4.全歼奖励
+        if not ens:
+            return rew + 60.0
 
         d_min, t_en = min([(math.sqrt(
             (e.state.p_pos[0] - agent.state.p_pos[0]) ** 2 + (e.state.p_pos[1] - agent.state.p_pos[1]) ** 2 + (
@@ -114,20 +120,23 @@ class Scenario(BaseScenario):
         is_engaging = d_min < 10.0
         am_i_attacking = False
 
-        # 3. 基础生存与高度保持
-        if 4.0 < agent.state.z_pos < 6.0 and is_engaging:
-            rew += 0.2
+        # 5. 高度机制：轻度越界惩罚
+        if is_engaging and (agent.state.z_pos < 3.0 or agent.state.z_pos > 7.0):
+            rew -= 0.2
 
-        # 4. 势能与攻击奖励
+        # 6. 姿态与攻击奖励:削弱纯瞄准，增强近距离攻击窗口
         if d_min < 12.0:
-            rew += (math.pi - ata) / math.pi * 3.0
-            if ata < math.pi / 4 and d_min < 4.5:
-                rew += 8.0
+            rew += (math.pi - ata) / math.pi * 1.0 # 瞄准
+            if ata < math.pi / 4 and d_min < 4.5:  # 真正进入攻击窗口时，奖励更高
+                rew += 12.0
                 am_i_attacking = True
                 t_en.hp -= 20.0
-                if t_en.hp <= 0: t_en.is_dead, t_en.done, rew = True, True, rew + 120.0
+                if t_en.hp <= 0:
+                    t_en.is_dead = True
+                    t_en.done = True
+                    rew += 120.0
 
-        # 5. 多机协同机制 (修改点：解除攻击态势下的编队距离约束)
+        # 7. 多机协同机制
         teammates = [a for a in world.agents if a.team == agent.team and a != agent and not a.is_dead]
         for tm in teammates:
             dist_to_tm = math.sqrt(
