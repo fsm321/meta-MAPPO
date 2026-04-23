@@ -125,10 +125,11 @@ class Scenario(BaseScenario):
             rew -= 0.2
 
         # 6. 姿态与攻击奖励:削弱纯瞄准，增强近距离攻击窗口
-        if d_min < 12.0:
-            rew += (math.pi - ata) / math.pi * 1.0 # 瞄准
+        if d_min < 15.0:
+            dist_factor = max(0.0, (15.0 - d_min) / 15.0)
+            rew += (math.pi - ata) / math.pi * 2.0 * dist_factor# 瞄准
             if ata < math.pi / 4 and d_min < 4.5:  # 真正进入攻击窗口时，奖励更高
-                rew += 12.0
+                rew += 15.0
                 am_i_attacking = True
                 t_en.hp -= 20.0
                 if t_en.hp <= 0:
@@ -140,19 +141,21 @@ class Scenario(BaseScenario):
         teammates = [a for a in world.agents if a.team == agent.team and a != agent and not a.is_dead]
         for tm in teammates:
             dist_to_tm = math.sqrt(
-                (agent.state.p_pos[0] - tm.state.p_pos[0]) ** 2 + (agent.state.p_pos[1] - tm.state.p_pos[1]) ** 2 + (
-                            agent.state.z_pos - tm.state.z_pos) ** 2)
+                (agent.state.p_pos[0] - tm.state.p_pos[0]) ** 2 +
+                (agent.state.p_pos[1] - tm.state.p_pos[1]) ** 2 +
+                (agent.state.z_pos - tm.state.z_pos) ** 2
+            )
 
             if not am_i_attacking:
                 # 非攻击状态：要求保持编队
-                if dist_to_tm < 0.8:
-                    rew -= 5.0
+                if dist_to_tm < 0.5:
+                    rew -= 1.5
                 elif 1.5 < dist_to_tm < 4.0 and is_engaging:
                     rew += 0.5
             else:
                 # 攻击状态：解除编队束缚，仅保留极限物理防撞惩罚
                 if dist_to_tm < 0.3:
-                    rew -= 5.0
+                    rew -= 2.0
 
             if am_i_attacking:
                 _, tm_ata = fast_compute_distance_and_angle_scalar(tm.state.p_pos[0], tm.state.p_pos[1], tm.state.z_pos,
