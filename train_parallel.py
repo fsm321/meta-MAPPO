@@ -132,7 +132,13 @@ def main(args, seed):
         2: deque(maxlen=50),
     }
 
-    current_meta_task = np.random.randint(0, 3)
+    # 【新增】：初始化任务逻辑
+    if args.fixed_task in [0, 1, 2]:
+        current_meta_task = args.fixed_task
+    else:
+        current_meta_task = np.random.randint(0, 3)
+
+    #current_meta_task = np.random.randint(0, 3)
 
     state_norm = Normalization(shape=args.state_dim)
     reward_scaling = RewardScaling(shape=(args.num_envs, 2), gamma=args.gamma)
@@ -262,22 +268,27 @@ def main(args, seed):
 
                 shared_buffer.count = 0
 
-                # 困难任务优先采样：胜率越低，下一轮被采样概率越高
-                task_probs = []
-                for t_id in range(3):
-                    t_perf = sum(task_win_rates[t_id]) / len(task_win_rates[t_id]) if len(task_win_rates[t_id]) > 0 else 0.5
-                    weight = (1.0 - t_perf) + 0.3
-                    task_probs.append(weight)
+                # 【新增】：网络更新后的任务选择逻辑
+                if args.fixed_task in [0, 1, 2]:
+                    current_meta_task = args.fixed_task
+                else:
+                    # 困难任务优先采样：胜率越低，下一轮被采样概率越高
+                    task_probs = []
+                    for t_id in range(3):
+                        t_perf = sum(task_win_rates[t_id]) / len(task_win_rates[t_id]) if len(
+                            task_win_rates[t_id]) > 0 else 0.5
+                        weight = (1.0 - t_perf) + 0.3
+                        task_probs.append(weight)
 
-                task_probs = np.array(task_probs, dtype=np.float32)
-                task_probs = np.clip(task_probs, 0.2, None)
-                task_probs = task_probs / task_probs.sum()
+                    task_probs = np.array(task_probs, dtype=np.float32)
+                    task_probs = np.clip(task_probs, 0.2, None)
+                    task_probs = task_probs / task_probs.sum()
 
-                current_meta_task = np.random.choice([0, 1, 2], p=task_probs)
+                    current_meta_task = np.random.choice([0, 1, 2], p=task_probs)
 
-                writer.add_scalar("Training/Task_0_Prob", task_probs[0], total_steps)
-                writer.add_scalar("Training/Task_1_Prob", task_probs[1], total_steps)
-                writer.add_scalar("Training/Task_2_Prob", task_probs[2], total_steps)
+                    writer.add_scalar("Training/Task_0_Prob", task_probs[0], total_steps)
+                    writer.add_scalar("Training/Task_1_Prob", task_probs[1], total_steps)
+                    writer.add_scalar("Training/Task_2_Prob", task_probs[2], total_steps)
 
             # 保存与评估：只在到达新里程碑时触发一次
             current_episode_index = total_steps // args.max_episode_steps
@@ -298,26 +309,7 @@ def main(args, seed):
                 e_r = evaluate_policy(args, MPEEnv(args), [shared_agent, shared_agent, None, None], state_norm)
                 writer.add_scalar("eval/reward", e_r, current_episode_index)
                 last_eval_index = current_episode_index
-        #if (total_steps // args.max_episode_steps) % args.save_freq == 0:
-            #shared_agent.save(0, total_steps)
-            # 【新增】：同时保存状态归一化的统计量
-            #if args.use_state_norm and hasattr(state_norm, 'running_ms'):
-                #save_path = f"{args.save_dir}/train_parallel/{args.algo_name}_seed{seed}/{args.date}/model/{total_steps}"
-                #if not os.path.exists(save_path): os.makedirs(save_path)
-                #np.save(f"{save_path}/norm_mean.npy", state_norm.running_ms.mean)
-                #np.save(f"{save_path}/norm_std.npy", state_norm.running_ms.std)
-        #if (total_steps // args.max_episode_steps) % args.evaluate_freq == 0:
-            # 【关键修复】：将 state_norm 传入，保证评估时观测数据的尺度与训练时一致
-            #e_r = evaluate_policy(args, MPEEnv(args), [shared_agent, shared_agent, None, None], state_norm)
-            #writer.add_scalar("eval/reward", e_r, total_steps // args.max_episode_steps)
-        #if total_episodes % 50 == 0:
-            #for t_id in range(3):
-                #if len(task_win_rates[t_id]) > 0:
-                    #writer.add_scalar(
-                        #f"Training/Task_{t_id}_WinRate",
-                        #100 * sum(task_win_rates[t_id]) / len(task_win_rates[t_id]),
-                        #total_episodes
-                    #)
+
     finally:
         envs.close()
         writer.close()
@@ -344,17 +336,18 @@ if __name__ == '__main__':
     parser.add_argument("--policy_dist", type=str, default="Gaussian")
     parser.add_argument("--hidden_width", type=int, default=256)
 
-    parser.add_argument("--buffer_size", type=int, default=6400)
-    parser.add_argument("--batch_size", type=int, default=6400)
-    parser.add_argument("--mini_batch_size", type=int, default=1600)
+    parser.add_argument("--fixed_task", type=int, default=-1)  # 单任务训练 0,1,2代表固定任务
+    parser.add_argument("--buffer_size", type=int, default=12800)
+    parser.add_argument("--batch_size", type=int, default=12800)
+    parser.add_argument("--mini_batch_size", type=int, default=3200)
 
-    parser.add_argument("--K_epochs", type=int, default=2)
-    parser.add_argument("--lr_a", type=float, default=5e-5)
+    parser.add_argument("--K_epochs", type=int, default=4)
+    parser.add_argument("--lr_a", type=float, default=2e-5)
     parser.add_argument("--lr_c", type=float, default=5e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lamda", type=float, default=0.95)
     parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--entropy_coef", type=float, default=0.05)
+    parser.add_argument("--entropy_coef", type=float, default=0.01)
 
     parser.add_argument("--use_adv_norm", type=bool, default=True)
     parser.add_argument("--use_state_norm", type=bool, default=True)
