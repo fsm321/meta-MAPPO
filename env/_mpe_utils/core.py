@@ -116,6 +116,14 @@ class World(object):
     # 物理步进逻辑 (保持不变)
     # ==========================================
     def step(self):
+        # Scripted opponents need to refresh their actions every env step.
+        for agent in self.scripted_agents:
+            if agent.action_callback is None:
+                continue
+            if getattr(agent, 'is_dead', False):
+                agent.action.u = np.zeros(self.dim_a)
+            else:
+                agent.action.u = np.asarray(agent.action_callback(agent, self), dtype=float)
         for agent in self.agents:
             if agent.movable:
                 self.update_agent_state(agent)

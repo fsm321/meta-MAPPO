@@ -100,6 +100,9 @@ class MultiAgentEnv(gym.Env):
         # advance world state
         # 同时执行world中的step
         self.world.step()
+        # Blue scripted opponents resolve combat through the scenario reward callback.
+        for agent in self.world.scripted_agents:
+            self._get_reward(agent)
         # record observation for each agent
         # 记录智能体的历史观测数据
         for agent in self.agents:

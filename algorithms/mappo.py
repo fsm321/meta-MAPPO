@@ -107,10 +107,16 @@ class MAPPO_Continuous:
     def update(self, replay_buffer, total_steps):
         s, a, a_logprob, r, s_next, dw, done = replay_buffer.numpy_to_tensor()
         adv, v_target = self.get_adv(s, r, s_next, dw, done)
+        # Prioritized sampling: emphasize samples with larger absolute advantages.
+        adv_abs = torch.abs(adv).squeeze(-1)
+        sample_prob = adv_abs + 1e-6
+        sample_prob = sample_prob / sample_prob.sum()
 
         a_loss_sum, c_loss_sum = 0, 0
         for _ in range(self.K_epochs):
-            for index in BatchSampler(SubsetRandomSampler(range(self.batch_size)), self.mini_batch_size, False):
+            batch_count = self.batch_size // self.mini_batch_size
+            for _ in range(batch_count):
+                index = torch.multinomial(sample_prob, self.mini_batch_size, replacement=False).tolist()
                 dist_now = self.actor.get_dist(s[index])
                 dist_entropy = dist_now.entropy().sum(dim=-1, keepdim=True)
                 a_logprob_now = dist_now.log_prob(a[index]).sum(dim=-1, keepdim=True)

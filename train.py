@@ -33,7 +33,19 @@ def main(args, seed):
     if args.restore: shared_agent.restore(0)
 
     total_steps, win_history = 0, deque(maxlen=100)
-    current_meta_task = np.random.randint(0, 3)
+
+    def select_curriculum_task(step_count):
+        # Curriculum learning: start from easier tasks, then expand to mixed tasks.
+        episode_idx = step_count // args.max_episode_steps
+        if episode_idx < 20000:
+            return 0
+        if episode_idx < 50000:
+            return np.random.choice([0, 1])
+        if episode_idx < 100000:
+            return np.random.choice([0, 1, 2])
+        return np.random.choice([0, 1, 2])
+
+    current_meta_task = select_curriculum_task(total_steps)
 
     # 实例化归一化工具
     state_norm = Normalization(shape=args.state_dim)
@@ -119,11 +131,23 @@ def main(args, seed):
 
             writer.add_scalar("Training/Actor_Loss", al, total_steps)
             writer.add_scalar("Training/Critic_Loss", cl, total_steps)
-            shared_buffer.count, current_meta_task = 0, np.random.randint(0, 3)
+            shared_buffer.count = 0
+            current_meta_task = select_curriculum_task(total_steps)
 
-        if (total_steps // args.max_episode_steps) % args.save_freq == 0: shared_agent.save(0, total_steps)
+        if (total_steps // args.max_episode_steps) % args.save_freq == 0:
+            shared_agent.save(0, total_steps)
+            # Save normalization statistics with the checkpoint so evaluation matches training inputs.
+            if args.use_state_norm and hasattr(state_norm, 'running_ms'):
+                save_path = f"{args.save_dir}/{args.date}/model/{int(total_steps // args.max_episode_steps)}"
+                np.save(f"{save_path}/norm_mean.npy", state_norm.running_ms.mean)
+                np.save(f"{save_path}/norm_std.npy", state_norm.running_ms.std)
         if (total_steps // args.max_episode_steps) % args.evaluate_freq == 0:
-            e_r = evaluate_policy(args, env, [shared_agent, shared_agent, None, None], None)
+            e_r = evaluate_policy(
+                args,
+                env,
+                [shared_agent, shared_agent, None, None],
+                state_norm if args.use_state_norm else None
+            )
             writer.add_scalar("eval/reward", e_r, total_steps // args.max_episode_steps)
 
 

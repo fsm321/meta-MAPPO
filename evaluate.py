@@ -33,8 +33,10 @@ def evaluate_policy(args, env, agents, state_norm, seed=0, times=10):
                 if agents[agent_id] is None:
                     actions.append(np.zeros(args.action_dim))
                 else:
+                    # Reuse the training-time normalization statistics during evaluation.
+                    obs = state_norm(s[agent_id], update=False) if args.use_state_norm and state_norm is not None else s[agent_id]
                     # 【核心修正】：使用 choose_action 并只取第一个返回值 (动作)
-                    a, _ = agents[agent_id].choose_action(s[agent_id])
+                    a, _ = agents[agent_id].choose_action(obs)
                     action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
                     actions.append(action)
 
@@ -52,7 +54,7 @@ def evaluate_policy(args, env, agents, state_norm, seed=0, times=10):
 # ==========================================
 # 2. 论文核心图表 1：高阶空战效能评估 (纯净战损比、耗时、能量)
 # ==========================================
-def evaluate_combat_metrics(args, env, agents, times=100):
+def evaluate_combat_metrics(args, env, agents, state_norm, times=100):
     total_wins = 0
     total_red_combat_deaths = 0  # 我方【真实被击杀】数
     total_blue_deaths = 0  # 击落敌机数
@@ -74,7 +76,8 @@ def evaluate_combat_metrics(args, env, agents, times=100):
                 if agents[agent_id] is None:
                     actions.append(np.zeros(args.action_dim))
                 else:
-                    a, _ = agents[agent_id].choose_action(s[agent_id])
+                    obs = state_norm(s[agent_id], update=False) if args.use_state_norm and state_norm is not None else s[agent_id]
+                    a, _ = agents[agent_id].choose_action(obs)
                     action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
                     actions.append(action)
                     episode_energy += np.linalg.norm(action) # 记录红方能量
@@ -116,7 +119,7 @@ def evaluate_combat_metrics(args, env, agents, times=100):
 # ==========================================
 # 3. 论文核心图表 2：抗干扰能力 (鲁棒性) 测试
 # ==========================================
-def evaluate_robustness(args, env, agents, noise_std, times=20):
+def evaluate_robustness(args, env, agents, state_norm, noise_std, times=20):
     evaluate_rewards = []
     for i in range(times):
         s = env.reset()
@@ -133,7 +136,8 @@ def evaluate_robustness(args, env, agents, noise_std, times=20):
                 if agents[agent_id] is None:
                     actions.append(np.zeros(args.action_dim))
                 else:
-                    a, _ = agents[agent_id].choose_action(noisy_s[agent_id])
+                    obs = state_norm(noisy_s[agent_id], update=False) if args.use_state_norm and state_norm is not None else noisy_s[agent_id]
+                    a, _ = agents[agent_id].choose_action(obs)
                     action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
                     actions.append(action)
 
@@ -149,7 +153,7 @@ def evaluate_robustness(args, env, agents, noise_std, times=20):
 # ==========================================
 # 4. 论文核心图表 3：失效恢复过程动态展示
 # ==========================================
-def evaluate_failure_recovery(args, env, agents):
+def evaluate_failure_recovery(args, env, agents, state_norm):
     s = env.reset()
     step_rewards = []
     dones = np.zeros(env.n)
@@ -164,7 +168,8 @@ def evaluate_failure_recovery(args, env, agents):
                 actions.append(np.zeros(args.action_dim))
                 s[agent_id] = np.zeros_like(s[agent_id])
             else:
-                a, _ = agents[agent_id].choose_action(s[agent_id])
+                obs = state_norm(s[agent_id], update=False) if args.use_state_norm and state_norm is not None else s[agent_id]
+                a, _ = agents[agent_id].choose_action(obs)
                 action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
                 actions.append(action)
 
@@ -211,6 +216,7 @@ if __name__ == '__main__':
     parser.add_argument("--use_grad_clip", type=bool, default=True)
     parser.add_argument("--use_lr_decay", type=bool, default=True)
     parser.add_argument("--use_adv_norm", type=bool, default=True)
+    parser.add_argument("--use_state_norm", type=bool, default=True)
 
     args = parser.parse_args()
     args.device = torch.device("cpu")
@@ -241,21 +247,35 @@ if __name__ == '__main__':
     agents = [shared_agent, shared_agent, None, None]
 
     print("\n--- 开始进行鲁棒性(抗干扰)测试 ---")
+    state_norm = None
+    if args.use_state_norm:
+        state_norm = Normalization(shape=args.state_dim)
+        try:
+            # Load the exact normalization statistics saved alongside the checkpoint.
+            state_norm.running_ms.mean = np.load(f"{args.model_dir}/norm_mean.npy")
+            state_norm.running_ms.std = np.load(f"{args.model_dir}/norm_std.npy")
+            print("状态归一化统计量加载成功。")
+        except FileNotFoundError:
+            print("未找到 norm_mean.npy / norm_std.npy，将按原始状态评估。")
+            state_norm = None
+
     noise_levels = [0.0, 0.1, 0.2, 0.3, 0.5]
     robustness_rewards = []
     for noise in noise_levels:
-        r = evaluate_robustness(args, env, agents, noise_std=noise, times=20)
+        r = evaluate_robustness(args, env, agents, state_norm, noise_std=noise, times=20)
         robustness_rewards.append(r)
         print(f"噪声强度 {noise:.1f} -> 平均奖励: {r:.2f}")
 
     np.save(f"robustness_data_{args.algo_name}.npy", robustness_rewards)
 
     print("\n--- 开始进行失效恢复测试 ---")
-    recovery_curve = evaluate_failure_recovery(args, env, agents)
+    recovery_curve = evaluate_failure_recovery(args, env, agents, state_norm)
     np.save(f"recovery_data_{args.algo_name}.npy", recovery_curve)
 
     print("\n--- 开始进行 100 局高阶空战效能评估 (实战化指标) ---")
-    win_rate, exchange_ratio, avg_win_steps, avg_energy, total_kills, total_deaths = evaluate_combat_metrics(args, env, agents, times=100)
+    win_rate, exchange_ratio, avg_win_steps, avg_energy, total_kills, total_deaths = evaluate_combat_metrics(
+        args, env, agents, state_norm, times=100
+    )
 
     print(f"\n=======================================================")
     print(f"        >>> {args.algo_name} 最终战术效能评估报告 <<<")

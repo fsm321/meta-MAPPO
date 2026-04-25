@@ -6,7 +6,8 @@ class ReplayBuffer:
     def __init__(self, args):
         self.s = np.zeros((args.buffer_size, args.state_dim))
         self.a = np.zeros((args.buffer_size, args.action_dim))
-        self.a_logprob = np.zeros((args.buffer_size, args.action_dim))
+        # PPO stores the summed joint log-probability of the continuous action.
+        self.a_logprob = np.zeros((args.buffer_size, 1))
         self.r = np.zeros((args.buffer_size, 1))
         self.s_ = np.zeros((args.buffer_size, args.state_dim))
         self.dw = np.zeros((args.buffer_size, 1))

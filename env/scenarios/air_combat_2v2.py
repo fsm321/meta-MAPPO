@@ -66,6 +66,12 @@ class Scenario(BaseScenario):
         action += np.random.normal(0, 0.15, size=3)
         return np.clip(action, -1.0, 1.0)
 
+    def _mark_red_team_done(self, world):
+        # Stop the episode once the red side has already secured the win.
+        for teammate in world.agents:
+            if teammate.team == 0 and not teammate.is_dead:
+                teammate.done = True
+
     def reward(self, agent, world):
         if agent.is_dead:
             if getattr(agent, 'just_killed_by_enemy', False):
@@ -108,6 +114,7 @@ class Scenario(BaseScenario):
 
         #4.全歼奖励
         if not ens:
+            self._mark_red_team_done(world)
             return rew + 60.0
 
         d_min, t_en = min([(math.sqrt(

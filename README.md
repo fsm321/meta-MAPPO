@@ -34,8 +34,22 @@ git add .
 git commit -m "修改胜率判断机制"
 git push
 ```
+```bash
+git add train_parallel.py
+git commit -m "单任务训练提高胜率"
+git push
+```
+```bash
+git add env/scenarios/air_combat_2v2.py
+git commit -m "单任务训练提高胜率"
+git push origin master
+```
 ## 训练
-
+```bash
+git add .
+git commit -m "第11次更新，从施伟论文得到灵感"
+git push
+```
 Anaconda终端
 ```bash
 D:
@@ -44,10 +58,16 @@ python run_experiments.py
 ```
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.2
+cd D:\Meta-MAPPO\Meta-MAPPO\7.23
 python train_parallel.py --algo_name MAPPO --num_envs 8
 ```
+```bash
+D:
+cd D:\Meta-MAPPO\Meta-MAPPO\7.2
 python train.py --algo_name MAPPO
+```
+7.23
+python train_parallel.py --fixed_task 0 --date task0_round2
 
 ## 训练结果
 
@@ -55,7 +75,7 @@ python train.py --algo_name MAPPO
 ### 1.奖励曲线，损失曲线，学习率
 ```bash
 D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.2
+cd D:\Meta-MAPPO\Meta-MAPPO\7.23
 tensorboard --logdir=./data/train_parallel
 ```
 ```bash
