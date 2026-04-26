@@ -67,6 +67,9 @@ class MAPPO_Continuous:
         self.max_action = args.max_action
         self.batch_size = args.batch_size
         self.mini_batch_size = args.mini_batch_size
+        self.n_red = getattr(args, "n_red", 2)
+        self.num_envs = getattr(args, "num_envs", 1)
+        self.rollout_group_size = self.n_red * self.num_envs
         self.max_train_steps = args.max_train_steps
         self.max_episode_steps = args.max_episode_steps  # 保存所需
         self.lr_a = args.lr_a
@@ -106,17 +109,31 @@ class MAPPO_Continuous:
 
     def update(self, replay_buffer, total_steps):
         s, a, a_logprob, r, s_next, dw, done = replay_buffer.numpy_to_tensor()
+        s = s.to(self.device)
+        a = a.to(self.device)
+        a_logprob = a_logprob.to(self.device)
+        r = r.to(self.device)
+        s_next = s_next.to(self.device)
+        dw = dw.to(self.device)
+        done = done.to(self.device)
         adv, v_target = self.get_adv(s, r, s_next, dw, done)
         # Prioritized sampling: emphasize samples with larger absolute advantages.
         adv_abs = torch.abs(adv).squeeze(-1)
-        sample_prob = adv_abs + 1e-6
-        sample_prob = sample_prob / sample_prob.sum()
+
+        if torch.isnan(adv_abs).any() or adv_abs.sum() <= 1e-8:
+            sample_prob = torch.ones_like(adv_abs) / len(adv_abs)
+        else:
+            priority_prob = adv_abs + 1e-6
+            priority_prob = priority_prob / priority_prob.sum()
+
+            uniform_prob = torch.ones_like(priority_prob) / len(priority_prob)
+            sample_prob = 0.7 * priority_prob + 0.3 * uniform_prob
 
         a_loss_sum, c_loss_sum = 0, 0
         for _ in range(self.K_epochs):
             batch_count = self.batch_size // self.mini_batch_size
             for _ in range(batch_count):
-                index = torch.multinomial(sample_prob, self.mini_batch_size, replacement=False).tolist()
+                index = torch.multinomial(sample_prob, self.mini_batch_size, replacement=False)
                 dist_now = self.actor.get_dist(s[index])
                 dist_entropy = dist_now.entropy().sum(dim=-1, keepdim=True)
                 a_logprob_now = dist_now.log_prob(a[index]).sum(dim=-1, keepdim=True)
@@ -146,23 +163,56 @@ class MAPPO_Continuous:
         return a_loss_sum / (self.K_epochs * (self.batch_size // self.mini_batch_size)), c_loss_sum / (
                     self.K_epochs * (self.batch_size // self.mini_batch_size))
 
+    #按智能体/环境分别计算 GAE，避免 red0、red1 以及不同并行环境之间串轨迹。
     def get_adv(self, s, r, s_next, dw, done):
         with torch.no_grad():
             v_s = self.critic(s)
             v_s_next = self.critic(s_next)
             # 【修正】：使用 1.0 - dw，避免 float tensor 按位取反报错
             deltas = r + self.gamma * v_s_next * (1.0 - dw) - v_s
+            group_size = self.rollout_group_size
+            total_size = deltas.shape[0]
+
+            # 如果长度不能整除 group_size，退回旧写法，避免直接报错
+            # 正常情况下，train.py 和 train_parallel.py 应该都能整除
+            if total_size % group_size != 0:
+                adv = torch.zeros_like(deltas).to(self.device)
+                gae = torch.zeros(1, 1, device=self.device)
+
+                for t in reversed(range(total_size)):
+                    gae = deltas[t] + self.gamma * self.lamda * gae * (1.0 - done[t])
+                    adv[t] = gae
+
+                v_target = adv + v_s
+                if self.use_adv_norm:
+                    adv = (adv - adv.mean()) / (adv.std() + 1e-5)
+
+                return adv, v_target
+
+            T = total_size // group_size
+
+            # [T, group_size, 1]
+            deltas = deltas.view(T, group_size, 1)
+            done = done.view(T, group_size, 1)
+
             adv = torch.zeros_like(deltas).to(self.device)
-            gae = 0
-            for t in reversed(range(len(deltas))):
+
+            # 每个 env-agent 单独维护一个 gae
+            gae = torch.zeros(group_size, 1, device=self.device)
+
+            for t in reversed(range(T)):
                 gae = deltas[t] + self.gamma * self.lamda * gae * (1.0 - done[t])
                 adv[t] = gae
+
+            # 展平成 [batch_size, 1]
+            adv = adv.view(-1, 1)
             v_target = adv + v_s
+
             if self.use_adv_norm: adv = ((adv - adv.mean()) / (adv.std() + 1e-5))
         return adv, v_target
 
     def lr_decay(self, total_steps):
-        progress = 1 - total_steps / self.max_train_steps
+        progress = max(0.0, 1 - total_steps / self.max_train_steps)
         lr_a_now, lr_c_now = self.lr_a * progress, self.lr_c * progress
         for p in self.optimizer_actor.param_groups: p['lr'] = lr_a_now
         for p in self.optimizer_critic.param_groups: p['lr'] = lr_c_now

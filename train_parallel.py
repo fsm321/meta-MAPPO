@@ -45,7 +45,6 @@ def worker(remote, parent_remote, env_class, args):
                 # 自动重置
                 if np.all(done):
                     info['terminal_observation'] = s_next
-                    s_next = env.reset(task_id=current_task)
 
                 remote.send((s_next, r, done, info))
 
@@ -106,6 +105,28 @@ class SubprocMPEVecEnv:
 # ======================================================================
 # 主训练循环
 # ======================================================================
+def select_train_task(args, total_steps):
+    if hasattr(args, "fixed_task") and args.fixed_task in [0, 1, 2]:
+        return args.fixed_task
+
+    episode_idx = total_steps // args.max_episode_steps
+    if episode_idx < 20000:
+        return 0
+    if episode_idx < 50000:
+        return np.random.choice([0, 1])
+    return np.random.choice([0, 1, 2])
+
+
+def save_norm_stats(args, state_norm, ckpt_idx):
+    if not args.use_state_norm or state_norm is None:
+        return
+
+    save_path = f"{args.save_dir}/{args.date}/model/{ckpt_idx}"
+    os.makedirs(save_path, exist_ok=True)
+    np.save(f"{save_path}/norm_mean.npy", state_norm.running_ms.mean)
+    np.save(f"{save_path}/norm_std.npy", state_norm.running_ms.std)
+
+
 def main(args, seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -114,7 +135,7 @@ def main(args, seed):
     envs = SubprocMPEVecEnv(args.num_envs, MPEEnv, args)
     args.state_dim, args.action_dim, args.max_action = envs.observation_space[0].shape[0], envs.action_space[0].shape[0], float(envs.action_space[0].high[0])
 
-    log_dir = f"{args.save_dir}/train_parallel/{args.algo_name}_seed{seed}/{args.date}"
+    log_dir = f"{args.save_dir}/{args.date}/logs/{args.algo_name}_parallel_seed{seed}"
     if not os.path.exists(log_dir): os.makedirs(log_dir)
     writer = SummaryWriter(log_dir=log_dir)
 
@@ -132,18 +153,10 @@ def main(args, seed):
         2: deque(maxlen=50),
     }
 
-    # 【新增】：初始化任务逻辑
-    if args.fixed_task in [0, 1, 2]:
-        current_meta_task = args.fixed_task
-    else:
-        current_meta_task = np.random.randint(0, 3)
-
-    #current_meta_task = np.random.randint(0, 3)
-
     state_norm = Normalization(shape=args.state_dim)
     reward_scaling = RewardScaling(shape=(args.num_envs, 2), gamma=args.gamma)
-
-    s = envs.reset([current_meta_task] * args.num_envs)
+    env_task_ids = np.array([select_train_task(args, total_steps) for _ in range(args.num_envs)])
+    s = envs.reset(env_task_ids)
     episode_steps = np.zeros(args.num_envs, dtype=int)
     red_ids = [0, 1]
 
@@ -154,97 +167,15 @@ def main(args, seed):
     print("==> 开始多进程并行训练...")
     try:
         while total_steps < args.max_train_steps:
-            s_normed = np.zeros((args.num_envs, len(red_ids), args.state_dim))
-            for env_idx in range(args.num_envs):
-                for j, rid in enumerate(red_ids):
-                    s_normed[env_idx][j] = state_norm(s[env_idx][rid]) if args.use_state_norm else s[env_idx][rid]
+            # ==========================================================
+            # 1. 先检查 buffer 是否快满；如果快满，先更新网络，再采样新动作
+            # ==========================================================
+            rollout_add_size = args.num_envs * len(red_ids)
 
-            s_flat = s_normed.reshape(args.num_envs * len(red_ids), args.state_dim)
-            a_flat, a_logp_flat = shared_agent.choose_action(s_flat)
-
-            a_batch = a_flat.reshape(args.num_envs, len(red_ids), args.action_dim)
-            a_logp_batch = a_logp_flat.reshape(args.num_envs, len(red_ids), 1)
-
-            actions = []
-            for env_idx in range(args.num_envs):
-                env_actions = [np.zeros(args.action_dim) for _ in range(envs.n)]
-                for j, rid in enumerate(red_ids):
-                    if args.policy_dist == "Beta":
-                        env_actions[rid] = 2 * (a_batch[env_idx][j] - 0.5) * args.max_action
-                    else:
-                        env_actions[rid] = a_batch[env_idx][j]
-                actions.append(env_actions)
-            s_next, r, done, infos = envs.step(actions)
-            episode_steps += 1
-
-            if args.use_reward_scaling:
-                raw_red_rewards = np.array([[r[env_idx][rid] for rid in red_ids] for env_idx in range(args.num_envs)])
-                scaled_red_rewards = reward_scaling(raw_red_rewards)
-            else:
-                scaled_red_rewards = np.array([[r[env_idx][rid] * 0.1 for rid in red_ids] for env_idx in range(args.num_envs)])
-
-            for env_idx in range(args.num_envs):
-                real_s_next = infos[env_idx]['terminal_observation'] if (np.all(done[env_idx]) and 'terminal_observation' in infos[env_idx]) else s_next[env_idx]
-
-                for j, rid in enumerate(red_ids):
-                    dw = True if done[env_idx][rid] and episode_steps[env_idx] != args.max_episode_steps else False
-                    s_next_normed = state_norm(real_s_next[rid], update=False) if args.use_state_norm else real_s_next[rid]
-                    shared_buffer.store(s_normed[env_idx][j], a_batch[env_idx][j], a_logp_batch[env_idx][j], scaled_red_rewards[env_idx][j], s_next_normed, dw, done[env_idx][rid])
-
-                # 检查环境是否结束或截断
-                if np.all(done[env_idx]) or episode_steps[env_idx] >= args.max_episode_steps:
-                    total_episodes += 1
-
-                    # 单独清零当前结束环境的奖励累积器（防止跨回合污染）
-                    if args.use_reward_scaling and hasattr(reward_scaling, 'ret'):
-                        reward_scaling.ret[env_idx] = np.zeros(2)
-
-                    if 'r_a' in infos[env_idx] and 'b_a' in infos[env_idx]:
-                        r_a = infos[env_idx]['r_a']
-                        b_a = infos[env_idx]['b_a']
-
-                        # 宽松胜率判定：全歼敌方，或时间耗尽时我方存活数更多
-                        if b_a == 0 and r_a > 0:
-                            is_win = 1
-                        elif episode_steps[env_idx] >= args.max_episode_steps and r_a > b_a:
-                            is_win = 1
-                        else:
-                            is_win = 0
-
-                        win_history.append(is_win)
-                        task_win_rates[current_meta_task].append(is_win)
-
-                    # 如果是截断而非自然 done，强制重置该环境
-                    if not np.all(done[env_idx]):
-                        s_next[env_idx] = envs.force_reset(env_idx, current_meta_task)
-
-                    episode_steps[env_idx] = 0
-
-                    # 每 50 局记录一次全局与分任务胜率
-                    if total_episodes % 50 == 0 and len(win_history) > 0:
-                        writer.add_scalar(
-                            "Training/Win_Rate",
-                            100 * sum(win_history) / len(win_history),
-                            total_episodes
-                        )
-
-                        for t_id in range(3):
-                            if len(task_win_rates[t_id]) > 0:
-                                writer.add_scalar(
-                                    f"Training/Task_{t_id}_WinRate",
-                                    100 * sum(task_win_rates[t_id]) / len(task_win_rates[t_id]),
-                                    total_episodes
-                                )
-
-            s = s_next
-            total_steps += args.num_envs
-
-            # 网络更新
-            if shared_buffer.count >= args.buffer_size:
+            if shared_buffer.count + rollout_add_size > args.buffer_size:
                 progress = min(total_steps / args.max_train_steps, 1.0)
                 current_performance = sum(win_history) / len(win_history) if len(win_history) > 0 else 0.0
 
-                # 动态 Meta-LR
                 if current_performance < 0.35:
                     meta_lr = 0.1 * (1.0 - progress ** 0.5)
                 elif current_performance > 0.70:
@@ -263,46 +194,156 @@ def main(args, seed):
 
                 writer.add_scalar("Training/Actor_Loss", al, total_steps)
                 writer.add_scalar("Training/Critic_Loss", cl, total_steps)
+
                 if args.algo_name == "Meta-MAPPO":
                     writer.add_scalar("Training/Meta_LR", meta_lr, total_steps)
 
                 shared_buffer.count = 0
 
-                # 【新增】：网络更新后的任务选择逻辑
-                if args.fixed_task in [0, 1, 2]:
-                    current_meta_task = args.fixed_task
-                else:
-                    # 困难任务优先采样：胜率越低，下一轮被采样概率越高
-                    task_probs = []
-                    for t_id in range(3):
-                        t_perf = sum(task_win_rates[t_id]) / len(task_win_rates[t_id]) if len(
-                            task_win_rates[t_id]) > 0 else 0.5
-                        weight = (1.0 - t_perf) + 0.3
-                        task_probs.append(weight)
+            # ==========================================================
+            # 2. 批量归一化所有并行环境中的红方观测
+            # ==========================================================
+            s_normed = np.zeros((args.num_envs, len(red_ids), args.state_dim))
 
-                    task_probs = np.array(task_probs, dtype=np.float32)
-                    task_probs = np.clip(task_probs, 0.2, None)
-                    task_probs = task_probs / task_probs.sum()
+            for env_idx in range(args.num_envs):
+                for j, rid in enumerate(red_ids):
+                    if args.use_state_norm:
+                        s_normed[env_idx][j] = state_norm(s[env_idx][rid])
+                    else:
+                        s_normed[env_idx][j] = s[env_idx][rid]
 
-                    current_meta_task = np.random.choice([0, 1, 2], p=task_probs)
+            s_flat = s_normed.reshape(args.num_envs * len(red_ids), args.state_dim)
 
-                    writer.add_scalar("Training/Task_0_Prob", task_probs[0], total_steps)
-                    writer.add_scalar("Training/Task_1_Prob", task_probs[1], total_steps)
-                    writer.add_scalar("Training/Task_2_Prob", task_probs[2], total_steps)
+            # ==========================================================
+            # 3. 共享策略批量选择动作
+            # ==========================================================
+            a_flat, a_logp_flat = shared_agent.choose_action(s_flat)
+
+            a_batch = a_flat.reshape(args.num_envs, len(red_ids), args.action_dim)
+            a_logp_batch = a_logp_flat.reshape(args.num_envs, len(red_ids), 1)
+
+            actions = []
+
+            for env_idx in range(args.num_envs):
+                env_actions = [np.zeros(args.action_dim) for _ in range(envs.n)]
+
+                for j, rid in enumerate(red_ids):
+                    if args.policy_dist == "Beta":
+                        env_actions[rid] = 2 * (a_batch[env_idx][j] - 0.5) * args.max_action
+                    else:
+                        env_actions[rid] = a_batch[env_idx][j]
+
+                actions.append(env_actions)
+
+            # ==========================================================
+            # 4. 并行环境交互
+            # ==========================================================
+            s_next, r, done, infos = envs.step(actions)
+            episode_steps += 1
+
+            # ==========================================================
+            # 5. 奖励缩放
+            # ==========================================================
+            if args.use_reward_scaling:
+                raw_red_rewards = np.array([
+                    [r[env_idx][rid] for rid in red_ids]
+                    for env_idx in range(args.num_envs)
+                ])
+                scaled_red_rewards = reward_scaling(raw_red_rewards)
+            else:
+                scaled_red_rewards = np.array([
+                    [r[env_idx][rid] * 0.1 for rid in red_ids]
+                    for env_idx in range(args.num_envs)
+                ])
+
+            # ==========================================================
+            # 6. 存储所有环境的红方经验，并处理结束环境
+            # ==========================================================
+            for env_idx in range(args.num_envs):
+                real_s_next = (
+                    infos[env_idx]["terminal_observation"]
+                    if (np.all(done[env_idx]) and "terminal_observation" in infos[env_idx])
+                    else s_next[env_idx]
+                )
+
+                for j, rid in enumerate(red_ids):
+                    # dw 表示真实终止：死亡/全歼导致结束时不 bootstrap
+                    dw = True if done[env_idx][rid] and episode_steps[env_idx] != args.max_episode_steps else False
+
+                    # done_for_gae 表示 GAE 是否断开：时间截断也要断开
+                    done_for_gae = done[env_idx][rid] or (episode_steps[env_idx] >= args.max_episode_steps)
+
+                    if args.use_state_norm:
+                        s_next_normed = state_norm(real_s_next[rid], update=False)
+                    else:
+                        s_next_normed = real_s_next[rid]
+
+                    shared_buffer.store(
+                        s_normed[env_idx][j],
+                        a_batch[env_idx][j],
+                        a_logp_batch[env_idx][j],
+                        scaled_red_rewards[env_idx][j],
+                        s_next_normed,
+                        dw,
+                        done_for_gae
+                    )
+
+                # ======================================================
+                # 7. 如果当前环境结束或达到最大步数，统计胜率并重置该环境
+                # ======================================================
+                if np.all(done[env_idx]) or episode_steps[env_idx] >= args.max_episode_steps:
+                    total_episodes += 1
+
+                    if args.use_reward_scaling:
+                        reward_scaling.R[env_idx] = np.zeros(2)
+
+                    if "r_a" in infos[env_idx] and "b_a" in infos[env_idx]:
+                        r_a = infos[env_idx]["r_a"]
+                        b_a = infos[env_idx]["b_a"]
+
+                        if b_a == 0 and r_a > 0:
+                            is_win = 1
+                        elif episode_steps[env_idx] >= args.max_episode_steps and r_a > b_a:
+                            is_win = 1
+                        else:
+                            is_win = 0
+
+                        win_history.append(is_win)
+                        task_win_rates[env_task_ids[env_idx]].append(is_win)
+
+                    new_task = select_train_task(args, total_steps)
+                    env_task_ids[env_idx] = new_task
+                    s_next[env_idx] = envs.force_reset(env_idx, new_task)
+                    episode_steps[env_idx] = 0
+
+                    if total_episodes % 50 == 0 and len(win_history) > 0:
+                        writer.add_scalar(
+                            "Training/Win_Rate",
+                            100 * sum(win_history) / len(win_history),
+                            total_episodes
+                        )
+
+                        for t_id in range(3):
+                            if len(task_win_rates[t_id]) > 0:
+                                writer.add_scalar(
+                                    f"Training/Task_{t_id}_WinRate",
+                                    100 * sum(task_win_rates[t_id]) / len(task_win_rates[t_id]),
+                                    total_episodes
+                                )
+
+            s = s_next
+            total_steps += args.num_envs
 
             # 保存与评估：只在到达新里程碑时触发一次
             current_episode_index = total_steps // args.max_episode_steps
 
-            if current_episode_index > 0 and current_episode_index % args.save_freq == 0 and current_episode_index != last_save_index:
+            if (
+                    current_episode_index > 0
+                    and current_episode_index % args.save_freq == 0
+                    and current_episode_index != last_save_index
+            ):
                 shared_agent.save(0, total_steps)
-
-                if args.use_state_norm and hasattr(state_norm, 'running_ms'):
-                    save_path = f"{args.save_dir}/train_parallel/{args.algo_name}_seed{seed}/{args.date}/model/{total_steps}"
-                    if not os.path.exists(save_path):
-                        os.makedirs(save_path)
-                    np.save(f"{save_path}/norm_mean.npy", state_norm.running_ms.mean)
-                    np.save(f"{save_path}/norm_std.npy", state_norm.running_ms.std)
-
+                save_norm_stats(args, state_norm, current_episode_index)
                 last_save_index = current_episode_index
 
             if current_episode_index > 0 and current_episode_index % args.evaluate_freq == 0 and current_episode_index != last_eval_index:
@@ -323,6 +364,7 @@ if __name__ == '__main__':
 
     parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--date", type=str, default="")
+    parser.add_argument("--fixed_task", type=int, default=-1)
 
     parser.add_argument("--max_episode_steps", type=int, default=500)
     parser.add_argument("--max_train_steps", type=int, default=int(5e8))
@@ -336,18 +378,17 @@ if __name__ == '__main__':
     parser.add_argument("--policy_dist", type=str, default="Gaussian")
     parser.add_argument("--hidden_width", type=int, default=256)
 
-    parser.add_argument("--fixed_task", type=int, default=-1)  # 单任务训练 0,1,2代表固定任务
-    parser.add_argument("--buffer_size", type=int, default=12800)
-    parser.add_argument("--batch_size", type=int, default=12800)
-    parser.add_argument("--mini_batch_size", type=int, default=3200)
+    parser.add_argument("--buffer_size", type=int, default=6400)
+    parser.add_argument("--batch_size", type=int, default=6400)
+    parser.add_argument("--mini_batch_size", type=int, default=1600)
 
     parser.add_argument("--K_epochs", type=int, default=4)
-    parser.add_argument("--lr_a", type=float, default=2e-5)
-    parser.add_argument("--lr_c", type=float, default=5e-4)
+    parser.add_argument("--lr_a", type=float, default=3e-5)
+    parser.add_argument("--lr_c", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lamda", type=float, default=0.95)
-    parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--entropy_coef", type=float, default=0.01)
+    parser.add_argument("--epsilon", type=float, default=0.15)
+    parser.add_argument("--entropy_coef", type=float, default=0.03)
 
     parser.add_argument("--use_adv_norm", type=bool, default=True)
     parser.add_argument("--use_state_norm", type=bool, default=True)

@@ -32,7 +32,7 @@ class Meta_MAPPO_Continuous(MAPPO_Continuous):
 
     def lr_decay(self, total_steps):
         # 学习率与探索率（熵）的线性衰减
-        progress = 1 - total_steps / self.max_train_steps
+        progress = max(0.0, 1 - total_steps / self.max_train_steps)
         lr_a_now, lr_c_now = self.lr_a * progress, self.lr_c * progress
 
         for p in self.optimizer_actor.param_groups:

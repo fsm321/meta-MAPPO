@@ -12,7 +12,10 @@ from algorithms.mappo import MAPPO_Continuous
 from algorithms.meta_mappo import Meta_MAPPO_Continuous
 import argparse
 
-
+def normalize_obs(args, obs, state_norm):
+    if args.use_state_norm and state_norm is not None:
+        return state_norm(obs, update=False)
+    return obs
 # ==========================================
 # 1. 基础性能评估
 # ==========================================
@@ -34,7 +37,7 @@ def evaluate_policy(args, env, agents, state_norm, seed=0, times=10):
                     actions.append(np.zeros(args.action_dim))
                 else:
                     # Reuse the training-time normalization statistics during evaluation.
-                    obs = state_norm(s[agent_id], update=False) if args.use_state_norm and state_norm is not None else s[agent_id]
+                    obs = normalize_obs(args, s[agent_id], state_norm)
                     # 【核心修正】：使用 choose_action 并只取第一个返回值 (动作)
                     a, _ = agents[agent_id].choose_action(obs)
                     action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
@@ -76,7 +79,7 @@ def evaluate_combat_metrics(args, env, agents, state_norm, times=100):
                 if agents[agent_id] is None:
                     actions.append(np.zeros(args.action_dim))
                 else:
-                    obs = state_norm(s[agent_id], update=False) if args.use_state_norm and state_norm is not None else s[agent_id]
+                    obs = normalize_obs(args, s[agent_id], state_norm)
                     a, _ = agents[agent_id].choose_action(obs)
                     action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
                     actions.append(action)
@@ -136,7 +139,7 @@ def evaluate_robustness(args, env, agents, state_norm, noise_std, times=20):
                 if agents[agent_id] is None:
                     actions.append(np.zeros(args.action_dim))
                 else:
-                    obs = state_norm(noisy_s[agent_id], update=False) if args.use_state_norm and state_norm is not None else noisy_s[agent_id]
+                    obs = normalize_obs(args, noisy_s[agent_id], state_norm)
                     a, _ = agents[agent_id].choose_action(obs)
                     action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
                     actions.append(action)
@@ -168,7 +171,7 @@ def evaluate_failure_recovery(args, env, agents, state_norm):
                 actions.append(np.zeros(args.action_dim))
                 s[agent_id] = np.zeros_like(s[agent_id])
             else:
-                obs = state_norm(s[agent_id], update=False) if args.use_state_norm and state_norm is not None else s[agent_id]
+                obs = normalize_obs(args, s[agent_id], state_norm)
                 a, _ = agents[agent_id].choose_action(obs)
                 action = 2 * (a - 0.5) * args.max_action if args.policy_dist == "Beta" else a
                 actions.append(action)
@@ -190,36 +193,39 @@ def evaluate_failure_recovery(args, env, agents, state_norm):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario_name", type=str, default="air_combat_2v2")
-    parser.add_argument("--algo_name", type=str, default="Meta-MAPPO")
-    parser.add_argument("--max_episode_steps", type=int, default=500)
-    parser.add_argument("--policy_dist", type=str, default="Gaussian")
-    parser.add_argument("--model_dir", type=str, default="./data/model_to_eval")
+    parser.add_argument("--algo_name", type=str, default="MAPPO")
 
-    parser.add_argument("--hidden_width", type=int, default=128)
-    parser.add_argument("--use_tanh", type=bool, default=True)
-    parser.add_argument("--use_orthogonal_init", type=bool, default=True)
-    parser.add_argument("--max_action", type=float, default=1.0)
-
-    parser.add_argument("--save_dir", type=str, default="./data")
     parser.add_argument("--date", type=str, default="eval")
-    parser.add_argument("--batch_size", type=int, default=4000)
-    parser.add_argument("--mini_batch_size", type=int, default=256)
-    parser.add_argument("--max_train_steps", type=int, default=5.1e7)
-    parser.add_argument("--lr_a", type=float, default=1e-4)
+    parser.add_argument("--save_dir", type=str, default="./data")
+    parser.add_argument("--max_action", type=float, default=1.0)
+    parser.add_argument("--model_dir", type=str, default="./data/model_to_eval")
+    parser.add_argument("--policy_dist", type=str, default="Gaussian")
+
+    parser.add_argument("--hidden_width", type=int, default=256)
+    parser.add_argument("--max_episode_steps", type=int, default=500)
+    parser.add_argument("--max_train_steps", type=int, default=5e8)
+
+    parser.add_argument("--batch_size", type=int, default=6000)
+    parser.add_argument("--mini_batch_size", type=int, default=1000)
+
+    parser.add_argument("--K_epochs", type=int, default=4)
+    parser.add_argument("--lr_a", type=float, default=3e-5)
     parser.add_argument("--lr_c", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lamda", type=float, default=0.95)
-    parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--K_epochs", type=int, default=5)
-    parser.add_argument("--entropy_coef", type=float, default=0.05)
-    parser.add_argument("--set_adam_eps", type=bool, default=True)
-    parser.add_argument("--use_grad_clip", type=bool, default=True)
-    parser.add_argument("--use_lr_decay", type=bool, default=True)
+    parser.add_argument("--epsilon", type=float, default=0.15)
+    parser.add_argument("--entropy_coef", type=float, default=0.03)
+
     parser.add_argument("--use_adv_norm", type=bool, default=True)
     parser.add_argument("--use_state_norm", type=bool, default=True)
+    parser.add_argument("--use_lr_decay", type=bool, default=True)
+    parser.add_argument("--use_grad_clip", type=bool, default=True)
+    parser.add_argument("--use_orthogonal_init", type=bool, default=True)
+    parser.add_argument("--set_adam_eps", type=bool, default=True)
+    parser.add_argument("--use_tanh", type=bool, default=True)
 
     args = parser.parse_args()
-    args.device = torch.device("cpu")
+    args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # ==========================================
     # 核心执行逻辑
@@ -276,12 +282,12 @@ if __name__ == '__main__':
     win_rate, exchange_ratio, avg_win_steps, avg_energy, total_kills, total_deaths = evaluate_combat_metrics(
         args, env, agents, state_norm, times=100
     )
-
     print(f"\n=======================================================")
     print(f"        >>> {args.algo_name} 最终战术效能评估报告 <<<")
     print(f"=======================================================")
     print(f"1. 综合任务胜率 (Win Rate):           {win_rate * 100:.1f} %")
-    print(f"2. 战损交换比 (Loss-Exchange Ratio):  {exchange_ratio:.2f} (共击落 {total_kills} 架 / 阵亡 {total_deaths} 架)")
-    print(f"3. 获胜平均耗时 (Avg Time-to-Kill):   {avg_win_steps:.1f} 步 (Time Steps)")
-    print(f"4. 机动能量消耗 (Maneuver Energy):    {avg_energy:.1f} (控制指令 L2 积分)")
+    print(f"2. 战损交换比 (Loss-Exchange Ratio):  {exchange_ratio:.2f} "
+          f"(共击落 {total_kills} 架 / 阵亡 {total_deaths} 架)")
+    print(f"3. 获胜平均耗时 (Avg Time-to-Kill):   {avg_win_steps:.1f} 步")
+    print(f"4. 机动能量消耗 (Maneuver Energy):    {avg_energy:.1f}")
     print(f"=======================================================\n")
