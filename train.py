@@ -187,7 +187,12 @@ def main(args, seed):
             )
             writer.add_scalar("eval/reward", e_r, current_episode_index)
             last_eval_index = current_episode_index
+    final_ckpt = total_steps // args.max_episode_steps
+    shared_agent.save(0, total_steps)
+    save_norm_stats(args, state_norm, final_ckpt)
+    print(f"Final model saved at checkpoint {final_ckpt}")
 
+    writer.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

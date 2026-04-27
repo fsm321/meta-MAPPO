@@ -11,6 +11,7 @@ from utils.normalization import Normalization
 from algorithms.mappo import MAPPO_Continuous
 from algorithms.meta_mappo import Meta_MAPPO_Continuous
 import argparse
+import json
 
 def normalize_obs(args, obs, state_norm):
     if args.use_state_norm and state_norm is not None:
@@ -345,3 +346,23 @@ if __name__ == '__main__':
     print(f"3. 获胜平均耗时 (Avg Time-to-Kill):   {avg_win_steps:.1f} 步")
     print(f"4. 机动能量消耗 (Maneuver Energy):    {avg_energy:.1f}")
     print(f"=======================================================\n")
+    num_eval_episodes = 100
+    num_red = 2
+
+    combat_metrics = {
+        "algo_name": args.algo_name,
+        "num_eval_episodes": num_eval_episodes,
+        "avg_kills": total_kills / num_eval_episodes,
+        "survival_rate": (num_red * num_eval_episodes - total_deaths) / (num_red * num_eval_episodes) * 100.0,
+        "exchange_ratio": exchange_ratio,
+        "avg_win_steps": avg_win_steps,
+        "avg_energy": avg_energy,
+        "total_kills": int(total_kills),
+        "total_deaths": int(total_deaths),
+        "win_rate": win_rate * 100.0
+    }
+
+    with open(f"combat_metrics_{args.algo_name}.json", "w", encoding="utf-8") as f:
+        json.dump(combat_metrics, f, ensure_ascii=False, indent=4)
+
+    print(f"战术效能指标已保存: combat_metrics_{args.algo_name}.json")
