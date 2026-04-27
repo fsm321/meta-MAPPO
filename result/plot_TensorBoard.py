@@ -65,7 +65,7 @@ def plot_metric(algo_logs, keyword, title, ylabel, output_name):
             plt.fill_between(steps_clipped, mean_vals - std_vals, mean_vals + std_vals, alpha=0.2, color=colors[algo])
 
     if has_data:
-        plt.xlabel('Training Episodes / Steps', fontsize=14, fontweight='bold')
+        plt.xlabel('Logged Step', fontsize=14, fontweight='bold')
         plt.ylabel(ylabel, fontsize=14, fontweight='bold')
         plt.title(title, fontsize=16, fontweight='bold')
         plt.legend(fontsize=12, loc='best')
@@ -97,19 +97,16 @@ if __name__ == '__main__':
     }
 
     print("====== 1. 开始处理【奖励曲线】 ======")
-    plot_metric(algo_logs, keyword="rewards",
-                title="Learning Curve Comparison (Reward)",
-                ylabel="Episode Reward",
+    plot_metric(algo_logs, keyword="eval/reward",
+                title="Evaluation Reward Comparison",
+                ylabel="Evaluation Reward",
                 output_name="1_Reward_Curve.png")
 
-    print("====== 2. 开始处理【Actor Loss(策略损失)曲线】 ======")
-    plot_metric(algo_logs, keyword="actor_loss",
-                title="Actor Loss Convergence",
-                ylabel="Loss Value",
-                output_name="2_Actor_Loss_Curve.png")
-
-    print("====== 3. 开始处理【Critic Loss(价值损失)曲线】 ======")
-    plot_metric(algo_logs, keyword="critic_loss",
-                title="Critic Loss Convergence",
-                ylabel="Loss Value",
-                output_name="3_Critic_Loss_Curve.png")
+    print("====== 2. 开始处理【胜率曲线】 ======")
+    plot_metric(
+        algo_logs,
+        keyword="Win_Rate",
+        title="Win Rate Comparison",
+        ylabel="Win Rate (%)",
+        output_name="2_Win_Rate_Curve.png"
+    )

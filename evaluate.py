@@ -122,18 +122,29 @@ def evaluate_combat_metrics(args, env, agents, state_norm, times=100):
 # ==========================================
 # 3. 论文核心图表 2：抗干扰能力 (鲁棒性) 测试
 # ==========================================
-def evaluate_robustness(args, env, agents, state_norm, noise_std, times=20):
+def evaluate_robustness(args, env, agents, state_norm, noise_std, times=100):
+    """
+    观测噪声鲁棒性测试：
+    在观测状态中加入高斯噪声 N(0, noise_std)，
+    每个噪声强度下测试 times 局，返回平均胜率和平均奖励。
+    """
+    total_wins = 0
     evaluate_rewards = []
+
     for i in range(times):
         s = env.reset()
         episode_steps = 0
-        episode_reward = 0
+        episode_reward = 0.0
         dones = np.zeros(env.n)
 
         while (not np.all(dones)) and (episode_steps < args.max_episode_steps):
             episode_steps += 1
             actions = []
-            noisy_s = [state + np.random.normal(0, noise_std, size=state.shape) for state in s]
+
+            noisy_s = [
+                state + np.random.normal(0, noise_std, size=state.shape)
+                for state in s
+            ]
 
             for agent_id in range(env.n):
                 if agents[agent_id] is None:
@@ -146,12 +157,37 @@ def evaluate_robustness(args, env, agents, state_norm, noise_std, times=20):
 
             s_next, r, done, _ = env.step(actions)
             episode_reward += sum(r[:2])
+
             s = s_next
             dones = done
 
         evaluate_rewards.append(episode_reward)
-    return np.mean(evaluate_rewards)
 
+        world = getattr(env, 'world', None) or getattr(env.env, 'world', None) or getattr(env.unwrapped, 'world', None)
+
+        if world is not None:
+            red_dead = sum([
+                1 for a in world.agents
+                if a.team == 0 and getattr(a, 'is_dead', False) and getattr(a, 'hp', 100) <= 0
+            ])
+            blue_dead = sum([
+                1 for a in world.agents
+                if a.team == 1 and getattr(a, 'is_dead', False)
+            ])
+        else:
+            red_dead = sum([int(d) for d in dones[:2]])
+            blue_dead = 2 if episode_reward > 80 else (1 if episode_reward > 30 else 0)
+
+        # 与 combat_metrics 保持一致：全歼敌方，或击落数大于我方真实阵亡数
+        is_win = (blue_dead == 2) or (blue_dead > red_dead)
+
+        if is_win:
+            total_wins += 1
+
+    win_rate = total_wins / times * 100.0
+    avg_reward = np.mean(evaluate_rewards)
+
+    return win_rate, avg_reward
 
 # ==========================================
 # 4. 论文核心图表 3：失效恢复过程动态展示
@@ -266,14 +302,32 @@ if __name__ == '__main__':
             state_norm = None
 
     noise_levels = [0.0, 0.1, 0.2, 0.3, 0.5]
+    robustness_winrates = []
     robustness_rewards = []
+
     for noise in noise_levels:
-        r = evaluate_robustness(args, env, agents, state_norm, noise_std=noise, times=20)
-        robustness_rewards.append(r)
-        print(f"噪声强度 {noise:.1f} -> 平均奖励: {r:.2f}")
+        win_rate, avg_reward = evaluate_robustness(
+            args,
+            env,
+            agents,
+            state_norm,
+            noise_std=noise,
+            times=100
+        )
 
+        robustness_winrates.append(win_rate)
+        robustness_rewards.append(avg_reward)
+
+        print(
+            f"噪声强度 {noise:.1f} -> "
+            f"胜率: {win_rate:.1f}% | 平均奖励: {avg_reward:.2f}"
+        )
+
+    np.save(f"robustness_winrate_{args.algo_name}.npy", robustness_winrates)
+    np.save(f"robustness_reward_{args.algo_name}.npy", robustness_rewards)
+
+    # 保留旧文件名，防止旧版 plot_combined.py 报错
     np.save(f"robustness_data_{args.algo_name}.npy", robustness_rewards)
-
     print("\n--- 开始进行失效恢复测试 ---")
     recovery_curve = evaluate_failure_recovery(args, env, agents, state_norm)
     np.save(f"recovery_data_{args.algo_name}.npy", recovery_curve)

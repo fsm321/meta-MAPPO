@@ -1,124 +1,73 @@
 ## 更新
 代码文件夹右击打开git bash
 ```bash
+git rm -r --cached .
 git add .
-git commit -m "更新了代码什么功能"
-git push
-```
-```bash
-git add .
-git commit -m "改进目标：奖励转正、胜率破50%、Loss降至0附近"
-git push
-```
-```bash
-git add .
-git commit -m "改进目标：改善MAPPO算法崩溃、胜率破80%、Loss降至0附近"
+git status
+git commit -m "第13次更新，GPT5.5修复MAPPO胜率低的问题，并修改评估指标文件"
 git push
 ```
 
-```bash
-git add .
-git commit -m "
-1.Meta-MAPPO（蓝线）探索不足，收敛过慢：
-外循环更新过于保守（Actor Loss基本不降），导致无人机在前期缺乏尝试高风险、高回报战术（如主动击落敌机）的动力，陷入“消极保命”状态。
-2.MAPPO（橙线）更新激进，存在震荡风险：
-单次策略调整幅度过大（Actor Loss骤降），虽然前期冲分快，但在复杂空战态势下容易“步子迈太大”，导致后期策略不稳定或性能崩溃。
-3.双算法均遭遇“性能天花板”（局部最优）：
-胜率卡在1.8左右未能突破满分，且价值网络损失（Critic Loss）极低。这表明奖励函数的边界可能存在冲突（例如“保持编队距离”与“靠近开火”相互拉扯），导致策略无法进一步进化。
-4.训练27个小时，Meta-MAPPO可以训练25万个回合，但MAPPO只能训练18万个回合，速度慢且差异过大
-5.添加并行环境训练"
-git push
-```
-```bash
-git add .
-git commit -m "修改胜率判断机制"
-git push
-```
-```bash
-git add train_parallel.py
-git commit -m "单任务训练提高胜率"
-git push
-```
-```bash
-git add env/scenarios/air_combat_2v2.py
-git commit -m "单任务训练提高胜率"
-git push origin master
-```
 ## 训练
 ```bash
-git add .
-git commit -m "第11次更新，从施伟论文得到灵感"
-git push
-```
-Anaconda终端
-```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
-python run_experiments.py
+python train_parallel.py --algo_name Meta-MAPPO --num_envs 8
 ```
-```bash
-D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.23
-python train_parallel.py --algo_name MAPPO --num_envs 8
-```
-```bash
-D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.2
-python train.py --algo_name MAPPO
-```
-7.23
-python train_parallel.py --fixed_task 0 --date task0_round2
+
 
 ## 训练结果
 
 训练过程中的日志会保存在 TensorBoard 中，可以通过以下命令查看：
-### 1.奖励曲线，损失曲线，学习率
-```bash
-D:
-cd D:\Meta-MAPPO\Meta-MAPPO\7.23
-tensorboard --logdir=./data/train_parallel
-```
+### 1.奖励曲线，胜率
 ```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
-tensorboard --logdir=./data/train
+tensorboard --logdir=./data
 ```
-plot_TensorBoard文件中改数据地址
+在plot_TensorBoard文件中改数据地址
 ```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2\result
 python plot_TensorBoard.py
 ```
-1_Reward_Curve.png（得分曲线，展示 Meta-MAPPO 更聪明）
 
-2_Actor_Loss_Curve.png（策略损失，展示 Meta-MAPPO 收敛更快）
-
-3_Critic_Loss_Curve.png（价值损失，附赠图，可放论文附录）
 ### 2.抗噪图、动态恢复图、百局胜率
+1. 先分别评估两个模型
 ```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
-python evaluate.py --algo_name MAPPO --model_dir .\data\MAPPO_seed10_0328_015339\model\326100
+python evaluate.py --algo_name MAPPO --model_dir ./data/你的MAPPO目录/model/检查点
 ```
 ```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
-python evaluate.py --algo_name Meta-MAPPO --model_dir .\data\Meta-MAPPO_seed10_0328_015339\model\327900
+python evaluate.py --algo_name Meta-MAPPO --model_dir ./data/你的Meta目录/model/检查点
 ```
-做完这两步后，目录下就会多出 4 个 .npy 文件：
-这些文件必须和 plot_combined_results.py 放在同一个文件夹
-
-更改胜率后运行
+生成：
+combat_metrics_MAPPO.json
+combat_metrics_Meta-MAPPO.json
+robustness_data_MAPPO.npy
+robustness_data_Meta-MAPPO.npy
+recovery_data_MAPPO.npy
+recovery_data_Meta-MAPPO.npy
+2. 再运行绘图
 ```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2\result
 python plot_combined.py
 ```
+输出：
+./result/combined_combat_metrics.png
+./result/combined_robustness.png
+./result/combined_recovery.png
+
+
 ### 3.3D图
 ```bash
 D:
 cd D:\Meta-MAPPO\Meta-MAPPO\7.2
-python plot_3D.py --algo_name Meta-MAPPO --model_dir .\data\Meta-MAPPO_seed10_0320_135440\model\407700
+python plot_3D.py --algo_name MAPPO --model_dir ./data/0426_213301/model/340000 --task_id 2
 ```
 
 ## 自定义参数
@@ -132,21 +81,20 @@ python train.py \
     --save_freq  1000 \#模型保存频率
     --buffer_size 4000 \#经验回放池容量
      --mini_batch_size 256 \#迷你批次大小
-    --hidden_width 128 \#隐藏层神经元数量
+    --hidden_width 256 \#隐藏层神经元数量
     --lr_a  1e-4 \#actor学习率
     --lr_c  3e-4 \#critic学习率
-    --epsilon 0.1 \#裁剪比例
-    --K_epochs 5 \#同一批数据会过 5 遍网络
+    --epsilon 0.15 \#裁剪比例
+    --K_epochs 4 \#同一批数据会过 5 遍网络
     
 ```
 
 ### 主要参数说明
 
 - `--scenario_name`: 场景名称（默认: `simple_spread`）
-- `--max_train_steps`: 最大训练步数（默认: 51000000）
-- `--max_episode_steps`: 每个回合最大步数（默认: 125）
+- `--max_train_steps`: 最大训练步数（默认: 500000000）
+- `--max_episode_steps`: 每个回合最大步数（默认: 500）
 - `--policy_dist`: 策略分布类型，`Gaussian` 或 `Beta`（默认: `Gaussian`）
-- `--restore`: 是否加载已有模型（默认: `False`）
 - `--save_dir`: 模型保存目录（默认: `./data`）
 - `--model_dir`: 模型加载目录
 

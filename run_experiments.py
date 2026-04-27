@@ -6,11 +6,12 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 
 def run_task(cmd):
-    print(f"🚀 启动并行任务: {cmd}")
-    # 执行命令，将输出重定向到空，防止多个进程在终端里疯狂打印导致卡顿
-    subprocess.run(cmd, shell=True)
-    print(f"✅ 任务完成: {cmd}")
-
+    print(f"启动并行任务: {cmd}")
+    result = subprocess.run(cmd, shell=True)
+    if result.returncode == 0:
+        print(f"任务完成: {cmd}")
+    else:
+        print(f"任务失败，returncode={result.returncode}: {cmd}")
 
 if __name__ == '__main__':
     algorithms = ["MAPPO", "Meta-MAPPO"]
@@ -23,16 +24,28 @@ if __name__ == '__main__':
     # 设定为 6: 运行 seed 10, 20, 30 (6个任务)
     # ==========================================
     num_parallel_tasks = 2  # <--- 以后你只需要修改这个数字！
-
+    num_envs = 8
+    max_train_steps = int(5e8)
     num_seeds_to_use = num_parallel_tasks // len(algorithms)
     active_seeds = all_seeds[:num_seeds_to_use]
     run_time = datetime.now().strftime("%m%d_%H%M%S")
 
+    log_dir = "./run_logs"
+    os.makedirs(log_dir, exist_ok=True)
     cmds = []
     for algo in algorithms:
         for seed in active_seeds:
             unique_date_tag = f"{algo}_seed{seed}_{run_time}"
-            cmd = f"python train.py --algo_name {algo} --seed {seed} --date {unique_date_tag}"
+            log_file = os.path.join(log_dir, f"{unique_date_tag}.log")
+            cmd = (
+                f"python train_parallel.py "
+                f"--algo_name {algo} "
+                f"--seed {seed} "
+                f"--num_envs {num_envs} "
+                f"--max_train_steps {max_train_steps} "
+                f"--date {unique_date_tag}"
+                f"> {log_file} 2>&1"
+            )
             cmds.append(cmd)
 
     print(f"准备执行 {len(cmds)} 个实验...")
@@ -45,4 +58,4 @@ if __name__ == '__main__':
     with Pool(num_parallel_tasks) as p:
         p.map(run_task, cmds)
 
-    print("🎉 所有实验全部训练完毕！你可以去画图了！")
+    print("🎉 所有实验全部训练完毕")

@@ -12,7 +12,8 @@ data/
 *.ckpt
 *.h5
 *.onnx
-
+*.gif
+*.png
 # TensorBoard 记录与日志文件
 runs/
 logs/
