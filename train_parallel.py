@@ -1,5 +1,6 @@
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+import copy
 import torch
 # 【关键】：限制 PyTorch 主进程的线程数
 torch.set_num_threads(1)
@@ -127,6 +128,47 @@ def save_norm_stats(args, state_norm, ckpt_idx):
     np.save(f"{save_path}/norm_std.npy", state_norm.running_ms.std)
 
 
+def make_buffer_args(args, buffer_size):
+    # Meta-MAPPO 的 support/query buffer 需要独立容量，避免共用原始大 buffer。
+    new_args = copy.copy(args)
+    new_args = copy.copy(args)
+    new_args.buffer_size = buffer_size
+    return new_args
+
+
+def init_meta_task_ids(args, total_steps):
+    """
+    前半环境作为 support，后半环境作为 query。
+    query 尽量复用对应 support 的任务，保证采样分布一致。
+    """
+    task_ids = np.zeros(args.num_envs, dtype=int)
+    support_envs = args.meta_support_envs
+    query_envs = args.num_envs - support_envs
+
+    for i in range(support_envs):
+        task_ids[i] = select_train_task(args, total_steps)
+
+    for i in range(query_envs):
+        paired_support_idx = i % support_envs
+        task_ids[support_envs + i] = task_ids[paired_support_idx]
+
+    return task_ids
+
+
+def select_meta_reset_task(args, env_idx, env_task_ids, total_steps):
+    """
+    support 环境重置时重新采样任务；
+    query 环境重置时跟随对应 support 环境的任务。
+    """
+    support_envs = args.meta_support_envs
+
+    if env_idx < support_envs:
+        return select_train_task(args, total_steps)
+
+    paired_support_idx = (env_idx - support_envs) % support_envs
+    return env_task_ids[paired_support_idx]
+
+
 def main(args, seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -140,7 +182,15 @@ def main(args, seed):
     writer = SummaryWriter(log_dir=log_dir)
 
     shared_agent = (Meta_MAPPO_Continuous(args) if args.algo_name == "Meta-MAPPO" else MAPPO_Continuous(args))
-    shared_buffer = ReplayBuffer(args)
+    if args.algo_name == "Meta-MAPPO":
+        meta_buffer_args = make_buffer_args(args, args.meta_buffer_size)
+        support_buffer = ReplayBuffer(meta_buffer_args)
+        query_buffer = ReplayBuffer(meta_buffer_args)
+        shared_buffer = None
+    else:
+        shared_buffer = ReplayBuffer(args)
+        support_buffer = None
+        query_buffer = None
     if args.restore: shared_agent.restore(0)
 
     total_steps, total_episodes = 0, 0
@@ -155,7 +205,10 @@ def main(args, seed):
 
     state_norm = Normalization(shape=args.state_dim)
     reward_scaling = RewardScaling(shape=(args.num_envs, 2), gamma=args.gamma)
-    env_task_ids = np.array([select_train_task(args, total_steps) for _ in range(args.num_envs)])
+    if args.algo_name == "Meta-MAPPO":
+        env_task_ids = init_meta_task_ids(args, total_steps)
+    else:
+        env_task_ids = np.array([select_train_task(args, total_steps) for _ in range(args.num_envs)])
     s = envs.reset(env_task_ids)
     episode_steps = np.zeros(args.num_envs, dtype=int)
     red_ids = [0, 1]
@@ -170,35 +223,66 @@ def main(args, seed):
             # ==========================================================
             # 1. 先检查 buffer 是否快满；如果快满，先更新网络，再采样新动作
             # ==========================================================
-            rollout_add_size = args.num_envs * len(red_ids)
+            if args.algo_name == "Meta-MAPPO":
+                support_group_size = args.meta_support_envs * len(red_ids)
+                query_group_size = (args.num_envs - args.meta_support_envs) * len(red_ids)
 
-            if shared_buffer.count + rollout_add_size > args.buffer_size:
-                progress = min(total_steps / args.max_train_steps, 1.0)
-                current_performance = sum(win_history) / len(win_history) if len(win_history) > 0 else 0.0
+                support_add_size = support_group_size
+                query_add_size = query_group_size
 
-                if current_performance < 0.35:
-                    meta_lr = 0.1 * (1.0 - progress ** 0.5)
-                elif current_performance > 0.70:
-                    meta_lr = 0.1 * (1.0 - progress ** 1.5)
-                else:
-                    meta_lr = 0.1 * (1.0 - progress)
+                buffer_ready = (
+                    support_buffer.count + support_add_size > args.meta_buffer_size or
+                    query_buffer.count + query_add_size > args.meta_buffer_size
+                )
 
-                meta_lr = max(meta_lr, 1e-4)
+                if buffer_ready:
+                    progress = min(total_steps / args.max_train_steps, 1.0)
+                    current_performance = sum(win_history) / len(win_history) if len(win_history) > 0 else 0.0
 
-                if args.algo_name == "Meta-MAPPO":
-                    old_w = shared_agent.get_weights()
-                    al, cl = shared_agent.update(shared_buffer, total_steps)
-                    shared_agent.meta_update(old_w, meta_lr)
-                else:
-                    al, cl = shared_agent.update(shared_buffer, total_steps)
+                    if current_performance < 0.35:
+                        meta_lr = 0.08 * (1.0 - progress ** 0.5)
+                    elif current_performance > 0.70:
+                        meta_lr = 0.05 * (1.0 - progress ** 1.5)
+                    else:
+                        meta_lr = 0.06 * (1.0 - progress)
 
-                writer.add_scalar("Training/Actor_Loss", al, total_steps)
-                writer.add_scalar("Training/Critic_Loss", cl, total_steps)
+                    meta_lr = max(meta_lr, 1e-4)
 
-                if args.algo_name == "Meta-MAPPO":
+                    sl_a, sl_c, ql_a, ql_c = shared_agent.meta_train_step(
+                        support_buffer=support_buffer,
+                        query_buffer=query_buffer,
+                        total_steps=total_steps,
+                        meta_lr=meta_lr,
+                        support_group_size=support_group_size,
+                        query_group_size=query_group_size,
+                        inner_epochs=args.meta_inner_epochs,
+                        outer_epochs=args.meta_outer_epochs
+                    )
+
+                    writer.add_scalar("Training/Support_Actor_Loss", sl_a, total_steps)
+                    writer.add_scalar("Training/Support_Critic_Loss", sl_c, total_steps)
+                    writer.add_scalar("Training/Query_Actor_Loss", ql_a, total_steps)
+                    writer.add_scalar("Training/Query_Critic_Loss", ql_c, total_steps)
+
+                    # 保留原有 Actor/Critic 图，便于直接和旧实验对比。
+                    writer.add_scalar("Training/Actor_Loss", ql_a, total_steps)
+                    writer.add_scalar("Training/Actor_Loss", ql_a, total_steps)
+                    writer.add_scalar("Training/Critic_Loss", ql_c, total_steps)
                     writer.add_scalar("Training/Meta_LR", meta_lr, total_steps)
 
-                shared_buffer.count = 0
+                    support_buffer.count = 0
+                    query_buffer.count = 0
+
+            else:
+                rollout_add_size = args.num_envs * len(red_ids)
+
+                if shared_buffer.count + rollout_add_size > args.buffer_size:
+                    al, cl = shared_agent.update(shared_buffer, total_steps)
+
+                    writer.add_scalar("Training/Actor_Loss", al, total_steps)
+                    writer.add_scalar("Training/Critic_Loss", cl, total_steps)
+
+                    shared_buffer.count = 0
 
             # ==========================================================
             # 2. 批量归一化所有并行环境中的红方观测
@@ -278,7 +362,15 @@ def main(args, seed):
                     else:
                         s_next_normed = real_s_next[rid]
 
-                    shared_buffer.store(
+                    if args.algo_name == "Meta-MAPPO":
+                        if env_idx < args.meta_support_envs:
+                            target_buffer = support_buffer
+                        else:
+                            target_buffer = query_buffer
+                    else:
+                        target_buffer = shared_buffer
+
+                    target_buffer.store(
                         s_normed[env_idx][j],
                         a_batch[env_idx][j],
                         a_logp_batch[env_idx][j],
@@ -311,7 +403,10 @@ def main(args, seed):
                         win_history.append(is_win)
                         task_win_rates[env_task_ids[env_idx]].append(is_win)
 
-                    new_task = select_train_task(args, total_steps)
+                    if args.algo_name == "Meta-MAPPO":
+                        new_task = select_meta_reset_task(args, env_idx, env_task_ids, total_steps)
+                    else:
+                        new_task = select_train_task(args, total_steps)
                     env_task_ids[env_idx] = new_task
                     s_next[env_idx] = envs.force_reset(env_idx, new_task)
                     episode_steps[env_idx] = 0
@@ -366,6 +461,10 @@ if __name__ == '__main__':
     parser.add_argument("--algo_name", type=str, default="MAPPO")
 
     parser.add_argument("--num_envs", type=int, default=8)
+    parser.add_argument("--meta_buffer_size", type=int, default=3200)
+    parser.add_argument("--meta_support_envs", type=int, default=4)
+    parser.add_argument("--meta_inner_epochs", type=int, default=1)
+    parser.add_argument("--meta_outer_epochs", type=int, default=1)
 
     parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--date", type=str, default="")

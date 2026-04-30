@@ -20,7 +20,7 @@ def normalize_obs(args, obs, state_norm):
 # ==========================================
 # 1. 基础性能评估
 # ==========================================
-def evaluate_policy(args, env, agents, state_norm, seed=0, times=10):
+def evaluate_policy(args, env, agents, state_norm, seed=0, times=100):
     evaluate_rewards = []
     for i in range(times):
         s = env.reset()

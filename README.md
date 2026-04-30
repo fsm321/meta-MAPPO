@@ -4,7 +4,7 @@
 git rm -r --cached .
 git add .
 git status
-git commit -m "第13次更新，GPT5.5修复MAPPO胜率低的问题，并修改评估指标文件"
+git commit -m "第14次更新，加入 support/query 划分，让 Meta-MAPPO 更像真正的元强化学习"
 git push
 ```
 

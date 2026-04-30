@@ -107,7 +107,14 @@ class MAPPO_Continuous:
             return a.cpu().numpy().flatten(), a_logprob.cpu().numpy().flatten()
         return a.cpu().numpy(), a_logprob.cpu().numpy()
 
-    def update(self, replay_buffer, total_steps):
+    def update(
+            self,
+            replay_buffer,
+            total_steps,
+            do_lr_decay=True,
+            rollout_group_size=None,
+            K_epochs_override=None
+    ):
         s, a, a_logprob, r, s_next, dw, done = replay_buffer.numpy_to_tensor()
         s = s.to(self.device)
         a = a.to(self.device)
@@ -116,7 +123,13 @@ class MAPPO_Continuous:
         s_next = s_next.to(self.device)
         dw = dw.to(self.device)
         done = done.to(self.device)
+        old_group_size = self.rollout_group_size
+        # Meta-MAPPO support/query 会拆分并行环境，因此这里允许临时覆盖 GAE 的 rollout 分组大小。
+        old_group_size = self.rollout_group_size
+        if rollout_group_size is not None:
+            self.rollout_group_size = rollout_group_size
         adv, v_target = self.get_adv(s, r, s_next, dw, done)
+        self.rollout_group_size = old_group_size
         # Prioritized sampling: emphasize samples with larger absolute advantages.
         adv_abs = torch.abs(adv).squeeze(-1)
 
@@ -130,7 +143,8 @@ class MAPPO_Continuous:
             sample_prob = 0.7 * priority_prob + 0.3 * uniform_prob
 
         a_loss_sum, c_loss_sum = 0, 0
-        for _ in range(self.K_epochs):
+        K_epochs = self.K_epochs if K_epochs_override is None else K_epochs_override
+        for _ in range(K_epochs):
             batch_count = self.batch_size // self.mini_batch_size
             for _ in range(batch_count):
                 index = torch.multinomial(sample_prob, self.mini_batch_size, replacement=False)
@@ -159,9 +173,10 @@ class MAPPO_Continuous:
                 a_loss_sum += a_loss.mean().item()
                 c_loss_sum += c_loss.item()
 
-        if self.use_lr_decay: self.lr_decay(total_steps)
-        return a_loss_sum / (self.K_epochs * (self.batch_size // self.mini_batch_size)), c_loss_sum / (
-                    self.K_epochs * (self.batch_size // self.mini_batch_size))
+        if do_lr_decay and self.use_lr_decay:
+            self.lr_decay(total_steps)
+        denom = K_epochs * (self.batch_size // self.mini_batch_size)
+        return a_loss_sum / denom, c_loss_sum / denom
 
     #按智能体/环境分别计算 GAE，避免 red0、red1 以及不同并行环境之间串轨迹。
     def get_adv(self, s, r, s_next, dw, done):
