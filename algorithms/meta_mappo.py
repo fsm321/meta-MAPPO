@@ -52,7 +52,6 @@ class Meta_MAPPO_Continuous(MAPPO_Continuous):
 
         # 先在 support 轨迹上做快速适应，再在 query 轨迹上检验适应后的策略。
         support_actor_loss, support_critic_loss = self.update(
-        support_actor_loss, support_critic_loss = self.update(
             support_buffer,
             total_steps,
             do_lr_decay=False,
@@ -71,7 +70,6 @@ class Meta_MAPPO_Continuous(MAPPO_Continuous):
         self.meta_update(old_weights, meta_lr)
 
         # 整个 meta step 只衰减一次学习率，避免 support/query 双重衰减。
-        if self.use_lr_decay:
         if self.use_lr_decay:
             self.lr_decay(total_steps)
 

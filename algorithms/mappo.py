@@ -144,10 +144,14 @@ class MAPPO_Continuous:
 
         a_loss_sum, c_loss_sum = 0, 0
         K_epochs = self.K_epochs if K_epochs_override is None else K_epochs_override
+        buffer_size = s.shape[0]
+        mini_batch_size = min(self.mini_batch_size, buffer_size)
+        effective_batch_size = min(self.batch_size, buffer_size)
+        batch_count = max(1, effective_batch_size // mini_batch_size)
+
         for _ in range(K_epochs):
-            batch_count = self.batch_size // self.mini_batch_size
             for _ in range(batch_count):
-                index = torch.multinomial(sample_prob, self.mini_batch_size, replacement=False)
+                index = torch.multinomial(sample_prob, mini_batch_size, replacement=False)
                 dist_now = self.actor.get_dist(s[index])
                 dist_entropy = dist_now.entropy().sum(dim=-1, keepdim=True)
                 a_logprob_now = dist_now.log_prob(a[index]).sum(dim=-1, keepdim=True)
@@ -175,7 +179,7 @@ class MAPPO_Continuous:
 
         if do_lr_decay and self.use_lr_decay:
             self.lr_decay(total_steps)
-        denom = K_epochs * (self.batch_size // self.mini_batch_size)
+        denom = K_epochs * batch_count
         return a_loss_sum / denom, c_loss_sum / denom
 
     #按智能体/环境分别计算 GAE，避免 red0、red1 以及不同并行环境之间串轨迹。

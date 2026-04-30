@@ -131,7 +131,6 @@ def save_norm_stats(args, state_norm, ckpt_idx):
 def make_buffer_args(args, buffer_size):
     # Meta-MAPPO 的 support/query buffer 需要独立容量，避免共用原始大 buffer。
     new_args = copy.copy(args)
-    new_args = copy.copy(args)
     new_args.buffer_size = buffer_size
     return new_args
 
@@ -265,7 +264,6 @@ def main(args, seed):
                     writer.add_scalar("Training/Query_Critic_Loss", ql_c, total_steps)
 
                     # 保留原有 Actor/Critic 图，便于直接和旧实验对比。
-                    writer.add_scalar("Training/Actor_Loss", ql_a, total_steps)
                     writer.add_scalar("Training/Actor_Loss", ql_a, total_steps)
                     writer.add_scalar("Training/Critic_Loss", ql_c, total_steps)
                     writer.add_scalar("Training/Meta_LR", meta_lr, total_steps)
